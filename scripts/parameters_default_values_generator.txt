@@ -1,0 +1,24 @@
+activation_name: ${global.activation_name!'gelu'}
+apply_skip_connection: ${global.apply_skip_connection!'True'}
+batch_size: ${global.batch_size!'2000000'}
+convolution_name: ${global.convolution_name!'sage'}
+convolution_params: ${global.convolution_params!'{'aggregator_type': 'mean'}'}
+d_embedding: ${global.d_embedding!'16'}
+early_stopping_steps: ${global.early_stopping_steps!'1000'}
+frequency_scale: ${global.frequency_scale!'0.02'}
+learning_rate: ${global.learning_rate!'0.0003'}
+lite: ${global.lite!'True'}
+max_num_neighbors: ${global.max_num_neighbors!'-1'}
+model_type: ${global.model_type!'GNN'}
+n_frequencies: ${global.n_frequencies!'48'}
+normalisation_name: ${global.normalisation_name!'batch'}
+num_encoder_layers: ${global.num_encoder_layers!'2'}
+num_epochs: ${global.num_epochs!'75'}
+num_hidden_features: ${global.num_hidden_features!'128'}
+num_predictor_layers: ${global.num_predictor_layers!'1'}
+num_preprocessing_layers: ${global.num_preprocessing_layers!'1'}
+num_workers: ${global.num_workers!'12'}
+remove_self_loops: ${global.remove_self_loops!'True'}
+table_output_root_path: ${global.table_output_root_path!'//tmp/'}
+val_every_steps: ${global.val_every_steps!'25'}
+weight_decay: ${global.weight_decay!'1e-05'}
