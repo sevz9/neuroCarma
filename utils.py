@@ -35,7 +35,7 @@ YT_TOKEN = os.environ.get("YT_TOKEN")
 class Config:
     # Data options
     remove_self_loops: bool = True
-    table_output_root_path: str = "//home/yr/fvelikon/tmp"
+    table_output_root_path: str = "//tmp/"
     model_type: str = "GNN"
     
     # Training parameters
