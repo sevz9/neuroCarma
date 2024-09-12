@@ -22,7 +22,7 @@ def _check_for_nans(df):
                                                                 Columns with their respective amount of NaNs: {number_of_nans_per_column}"""
 
 def _read_dataframe_from_yt(mr_table):
-    rows = list(yt.read_table(mr_table, format="yson", unordered=True, enable_read_parallel=True))
+    rows = list(yt.read_table(mr_table["table"], format="yson", unordered=True, enable_read_parallel=True))
     df = pd.DataFrame(rows)
     _check_for_nans(df)
     
@@ -63,7 +63,7 @@ def read_features_table(mr_table, feature_columns_presented_in_train: OptionalCo
     if feature_columns_presented_in_train is None and TARGET_COLUMN not in all_columns:
         df[TARGET_COLUMN] = False
 
-    if len(set(all_columns) & SERVICE_COLUMNS_IN_FEATURES_TABLE) != SERVICE_COLUMNS_IN_FEATURES_TABLE:
+    if len(set(all_columns) & SERVICE_COLUMNS_IN_FEATURES_TABLE) != len(SERVICE_COLUMNS_IN_FEATURES_TABLE):
         raise KeyError(f"Some of the obligatory columns ({SERVICE_COLUMNS_IN_FEATURES_TABLE}) are missing! Missing columns are: {SERVICE_COLUMNS_IN_FEATURES_TABLE - set(all_columns)}")
     
     features_values, all_features_names = _process_features_columns(df)
@@ -129,11 +129,16 @@ def main_prepare_mr_tables(
     PARAMS_OUTPUT["targets"] = data_dict["targets"]
 
     PARAMS_OUTPUT["node_ids"] = data_dict["node_ids"]
+    PARAMS_OUTPUT["node_indices"] = np.array([_node_ids_to_index_mapping[node_id] for node_id in PARAMS_OUTPUT["node_ids"]])
+    PARAMS_OUTPUT["node_index_to_id_mapper"] = {node_index: node_id for node_id, node_index in _node_ids_to_index_mapping.items()}
+    
+
     PARAMS_OUTPUT["masks"] = data_dict["masks"]
-    PARAMS_OUTPUT["adjacency_matrix_rows_cols"] = data_dict["adjacency_matrix_rows_cols"]
+    PARAMS_OUTPUT["adjacency_matrix_rows_cols"] = adjacency_matrix_rows_cols
 
 
     PARAMS_OUTPUT["train_metadata"] = dict(features_columns=data_dict["features_columns"])
+    
 
 
     return PARAMS_OUTPUT

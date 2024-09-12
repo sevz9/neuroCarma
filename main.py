@@ -318,7 +318,7 @@ def main():
     table_output_root_path: str = config.table_output_root_path
 
 
-    graph, scaler, train_metadata = prepare_json_input(data_dir=datadir, train_metadata_file=train_metadata_file)
+    graph, scaler, train_metadata, node_index_to_id_mapper = prepare_json_input(data_dir=datadir, train_metadata_file=train_metadata_file)
     
     joblib.dump(scaler, "checkpoints/scaler.bin")
     with open("checkpoints/train_metadata", "wb") as write_handler:
@@ -372,11 +372,11 @@ def main():
     
     print("Initialized trainer")
     index2logits_df: Optional[pd.DataFrame] = trainer.train_and_test()
-
-
+    index2logits_df[NODE_ID_DATA_NAME] = index2logits_df[NODE_ID_DATA_NAME].map(node_index_to_id_mapper)
     if mode == "inference" and not debug_mode:
         
         print(f"Predictions:\n{index2logits_df}")
+        
         index2logits_df.to_csv("index2logits_df.csv")
         index2logits_list_of_dicts = index2logits_df.to_dict('records')
 

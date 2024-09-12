@@ -43,14 +43,14 @@ class Config:
 
     # Training parameters
     batch_size: int = 2000000
-    num_epochs: int = 75
+    num_epochs: int = 2
     max_num_neighbors: int = -1  # -1 for all neighbors to be sampled
 
     num_workers: int = 12
     learning_rate: float = 0.0003
     weight_decay: float = 0.00001
 
-    val_every_steps: int = 25
+    val_every_steps: int = 2
     early_stopping_steps: int = 1000
 
     # Model Parameters
@@ -137,18 +137,18 @@ def get_config(config_dir: Path = Path().cwd(), debug_mode=False):
     return config
 
 
-def _scale_features(train_val_test_features_container: List[List[float]], scaler_state_file: Path = None):
+def _scale_features(features: np.ndarray, scaler_state_file: Path = None):
     if scaler_state_file.exists():
         import joblib
 
         scaler = joblib.load(filename=scaler_state_file)
     else:
         scaler = StandardScaler()
-        scaler.fit(train_val_test_features_container[0])  # first is train
+        scaler.fit(features)  # fits during training phase
 
-    transformed_container = [scaler.transform(features) for features in train_val_test_features_container]
+    transformed_features = scaler.transform(features)
 
-    return transformed_container, scaler
+    return transformed_features, scaler
 
 
 def _construct_dgl_graph(
@@ -168,7 +168,7 @@ def _construct_dgl_graph(
 
     row_coordinates = torch.tensor(row_coordinates).long()
     col_coordinates = torch.tensor(col_coordinates).long()
-    graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.int32)
+    graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.int32, num_nodes=len(node_ids))
     graph.ndata[FEATURES_DATA_NAME] = torch.tensor(features, dtype=torch.float32)
     graph.ndata[LABELS_DATA_NAME] = torch.tensor(targets, dtype=torch.float32).reshape(-1, 1)
 
@@ -301,26 +301,28 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
 
     features = input_dict[FEATURES_DATA_NAME]
     features, scaler = _scale_features(
-        train_val_test_features_container=features,
+        features=features,
         scaler_state_file=scaler_state_filename,
     )
 
     targets = input_dict["targets"]
     adjacency = input_dict["adjacency_matrix_rows_cols"]
-    node_ids = input_dict["node_ids"]
+    node_indices = input_dict["node_indices"]
+    
+    node_index_to_id_mapper = input_dict["node_index_to_id_mapper"]
+    
 
     graph = _construct_dgl_graph(
         adjacency_matrix_rows_cols=adjacency,
         features=features,
         targets=targets,
-        node_ids=node_ids,
+        node_ids=node_indices,
         train_mask=train_mask,
         val_mask=val_mask,
         test_mask=test_mask
-        
     )
 
-    return graph, scaler, input_dict["train_metadata"]
+    return graph, scaler, input_dict["train_metadata"], node_index_to_id_mapper
 
 
 def write_output_to_YT(output: list[dict[str, Any]], table_path_root: str = "//home/yr/fvelikon/tmp") -> dict[str, str]:
