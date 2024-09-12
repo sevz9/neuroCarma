@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, List, Optional, Dict, ClassVar
 
+from pydantic import validate_arguments
 from dataclasses import dataclass
 import yaml
 import dgl
@@ -34,6 +35,7 @@ NODE_ID_DATA_NAME = "key"
 YT_TOKEN = os.environ.get("YT_TOKEN")
 
 # TODO Convolution parameters proper handling
+@validate_arguments
 @dataclass
 class Config:
     # Data options
