@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from dgl import load_graphs, remove_self_loop
 from torch.hub import tqdm
-import ujson
+import json
 import pandas as pd
 
 ##################### Nirvana ##########################################
@@ -18,13 +18,16 @@ from utils import (
     Config,
     FEATURES_DATA_NAME,
     LABELS_DATA_NAME,
-    MASK_DATA_NAME,
+    TRAIN_MASK_DATA_NAME,
+    VAL_MASK_DATA_NAME,
+    TEST_MASK_DATA_NAME,
     OUTPUT_MASK_NAME,
-    USERID_DATA_NAME,
+    NODE_ID_DATA_NAME,
     construct_subgraph_from_blocks,
     init_dataloader,
     write_output_to_YT,
     get_config,
+    prepare_json_input
 )
 
 from models.gnn_initial_and_plre import create_graph_model
@@ -32,13 +35,11 @@ from models.gnn_initial_and_plre import create_graph_model
 
 ##################### Nirvana ##########################################
 
-OUTPUT_FILE_NAME = "index2logit"
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 sys.path.append("./")
 
-
+# TODO HERE
 class TrainEval:
     def __init__(
         self,
@@ -68,7 +69,7 @@ class TrainEval:
         self.val_every_steps = val_every_steps
         self.early_stopping_steps = early_stopping_steps
 
-        self.node_data_names = [FEATURES_DATA_NAME, MASK_DATA_NAME, LABELS_DATA_NAME, USERID_DATA_NAME]
+        self.node_data_names = [FEATURES_DATA_NAME, TRAIN_MASK_DATA_NAME, VAL_MASK_DATA_NAME, TEST_MASK_DATA_NAME, LABELS_DATA_NAME, NODE_ID_DATA_NAME]
 
         self.mode = mode
 
@@ -77,10 +78,10 @@ class TrainEval:
             self.model.load_state_dict(state_dict)
             print("State dict is loaded")
 
-    def get_logits_and_labels_for_output_nodes(self, subgraph: dgl.DGLGraph, apply_train_val_mask: bool = True):
+    def get_logits_and_labels_for_output_nodes(self, subgraph: dgl.DGLGraph, mask_data_name: torch.Tensor):
         output_nodes_mask = subgraph.ndata[OUTPUT_MASK_NAME]
         input_features = subgraph.ndata[FEATURES_DATA_NAME]
-        all_output_mask = subgraph.ndata[MASK_DATA_NAME]
+        all_output_mask = subgraph.ndata[mask_data_name]
 
         all_logits = self.model(subgraph, input_features)
         
@@ -88,7 +89,7 @@ class TrainEval:
         
         output_nodes_logits = all_logits[output_nodes_mask]
         output_nodes_labels = subgraph.ndata[LABELS_DATA_NAME][output_nodes_mask]
-        output_nodes_ids = subgraph.ndata[USERID_DATA_NAME][output_nodes_mask]
+        output_nodes_ids = subgraph.ndata[NODE_ID_DATA_NAME][output_nodes_mask]
 
         # if apply_train_val_mask:
         #     logits = output_nodes_logits[output_nodes_train_mask]
@@ -133,7 +134,7 @@ class TrainEval:
 
             self.optimizer.zero_grad()
 
-            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph)
+            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph, mask_data_name=TRAIN_MASK_DATA_NAME)
             loss = self.criterion(return_dict["logits"], return_dict["labels"])
 
             loss.backward()
@@ -153,7 +154,7 @@ class TrainEval:
         for t, data in enumerate(tk, 1):
             subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
 
-            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph, apply_train_val_mask=False)
+            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph, mask_data_name=VAL_MASK_DATA_NAME)
             loss = self.criterion(return_dict["logits"], return_dict["labels"])
 
             total_loss += loss.item()
@@ -183,7 +184,7 @@ class TrainEval:
         for t, data in enumerate(tk, 1):
             subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
 
-            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph)
+            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph, mask_data_name=TEST_MASK_DATA_NAME)
 
             logits = return_dict["logits"]
             true_labels = return_dict["labels"]
@@ -208,7 +209,7 @@ class TrainEval:
         output_nodes_ids: np.ndarray = list_of_tensors_to_numpy_flat(output_nodes_ids)
 
         id2logits_df = pd.DataFrame(
-            data={USERID_DATA_NAME: output_nodes_ids, "score": predictions}, columns=[USERID_DATA_NAME, "score"]
+            data={NODE_ID_DATA_NAME: output_nodes_ids, "score": predictions}, columns=[NODE_ID_DATA_NAME, "score"]
         )
 
         return id2logits_df
@@ -233,20 +234,19 @@ class TrainEval:
                         #############
                         # IMPORTANT #
                         #############
-
-                        copy_out_to_snapshot("checkpoints")
+                        copy_out_to_snapshot("./")
 
                 torch.cuda.empty_cache()
 
             print(f"Training Loss : {best_train_loss}")
             print(f"Valid Loss : {best_valid_loss}")
         else:
-            f"The mode is {self.mode}, going straight to testing"
+            print(f"The mode is {self.mode}, going straight to testing")
             
             
         torch.save(self.model.state_dict(), "checkpoints/last-weights.pt")
         print("Saved Last Weights")
-        copy_out_to_snapshot("checkpoints")
+        copy_out_to_snapshot("./")
 
         if self.test_dataloader is not None:
             print("Performing test on test dataloader")
@@ -265,14 +265,6 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--datadir", type=Path, help="Directory with data", default="./data")
 
     parser.add_argument("--mode", choices=["training", "inference"], default="training")
-
-    parser.add_argument(
-        "--data_type",
-        type=str,
-        choices=["dglgraph", "json"],
-        help="Indicator whether or not the data is already preprocessed and stored as a graph",
-        default="json",
-    )
     
     parser.add_argument(
         "--device",
@@ -287,35 +279,31 @@ def get_parser() -> argparse.ArgumentParser:
 
 
 
+
 def main():
     args = get_parser().parse_args()
     
-    if args.device is not None:
+    if args.device is not None: # for local launch with manual device choise
         DEVICE = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     else:
         DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    print("Device is ", DEVICE)
     
+    mode: str = args.mode
+    debug_mode: bool = args.debug
+    datadir: Path = args.datadir
+
     #############
     # IMPORTANT #
     #############
-    copy_snapshot_to_out("checkpoints")
-    datadir: Path = args.datadir
-    data_dtype: str = args.data_type
-    mode: str = args.mode
-    debug_mode: bool = args.debug
-    config: Config = get_config(config_dir=Path().cwd()) if not debug_mode else Config() # default options for debugging
-    table_output_root_path: str = config.table_output_root_path
+    copy_snapshot_to_out("./")
 
-    MODEL_PARAMS = config.MODEL_PARAMS
-    TRAINING_PARAMETERS = config.TRAINING_PARAMS
-
-    print("Device is ", DEVICE)
 
     # NOTE: this is not the final implementation of training and evaluation!
     if mode == "training":
         weights_file = None
         train_metadata_file = None
+        
         print(f"The mode is {mode}, launching initial training...")
     else:
         weights_file = "checkpoints/last-weights.pt"
@@ -323,43 +311,27 @@ def main():
 
         print(f"The mode is {mode}, picking preempted weights...")
 
-    if data_dtype == "json":
-        from utils import prepare_json_input
 
-        graphs, scaler, train_metadata = prepare_json_input(data_dir=datadir, train_metadata_file=train_metadata_file)
-        joblib.dump(scaler, "checkpoints/scaler.bin")
-        
-        # breakpoint()
-        with open("checkpoints/train_metadata", "wb") as write_handler:
-            joblib.dump(train_metadata, write_handler)
-        
-        print("Successfully created graphs")
+    config: Config = get_config(debug_mode=debug_mode)
+    MODEL_PARAMS = config.MODEL_PARAMS
+    TRAINING_PARAMETERS = config.TRAINING_PARAMS
+    table_output_root_path: str = config.table_output_root_path
 
-    else:
-        graphs_filename = str(datadir / "graphs_train_val_test.bin")  # this is predefined name, used for testing
-        graphs, _ = load_graphs(graphs_filename)
 
-        graphs[0].ndata[MASK_DATA_NAME] = graphs[0].ndata[MASK_DATA_NAME].bool()
-        graphs[1].ndata[MASK_DATA_NAME] = graphs[1].ndata[MASK_DATA_NAME].bool()
-        graphs[2].ndata[MASK_DATA_NAME] = graphs[2].ndata[MASK_DATA_NAME].bool()
-        
-        print("Read preprocessed graphs from provided file")
+    graph, scaler, train_metadata = prepare_json_input(data_dir=datadir, train_metadata_file=train_metadata_file)
+    
+    joblib.dump(scaler, "checkpoints/scaler.bin")
+    with open("checkpoints/train_metadata", "wb") as write_handler:
+        joblib.dump(train_metadata, write_handler)
+    print("Successfully created graphs and dumped metadata")
         
 
     if config.remove_self_loops:
-        [graph_train, graph_valid, graph_test] = [remove_self_loop(g) for g in graphs]
-    else:
-        graph_train, graph_valid, graph_test = graphs
-
-    num_input_features = graph_train.ndata[FEATURES_DATA_NAME].shape[1]
+        graph = remove_self_loop(graph)
     
-    if USERID_DATA_NAME not in graphs[0].ndata:
-        for i in range(3):
-            graphs[i].ndata[USERID_DATA_NAME] = torch.arange(len(graphs[i].ndata[FEATURES_DATA_NAME]))
-        
-        print("userid data isn't provided, assigning each node its relative index")
-
-    print("Successfully created graphs")        
+    num_input_features = graph.ndata[FEATURES_DATA_NAME].shape[1]
+    
+    print("Successfully created graph and removed self-loops if necessary")        
         
 
     MODEL_PARAMS.update(dict(num_input_features=num_input_features))
@@ -379,13 +351,9 @@ def main():
     batch_size = TRAINING_PARAMETERS["batch_size"]
     num_workers = TRAINING_PARAMETERS["num_workers"]
 
-    train_loader = init_dataloader(graph_train, sampler, DEVICE, batch_size=batch_size, num_workers=num_workers)
-    val_loader = init_dataloader(
-        graph_valid, sampler, DEVICE, shuffle=False, batch_size=batch_size, num_workers=num_workers
-    )
-    test_loader = init_dataloader(
-        graph_test, sampler, DEVICE, shuffle=False, batch_size=batch_size, num_workers=num_workers
-    )
+    train_loader = init_dataloader(graph, sampler, DEVICE, batch_size=batch_size, num_workers=num_workers)
+    val_loader = init_dataloader(graph, sampler, DEVICE, shuffle=False, batch_size=batch_size, num_workers=num_workers)
+    test_loader = init_dataloader(graph, sampler, DEVICE, shuffle=False, batch_size=batch_size, num_workers=num_workers)
 
     trainer = TrainEval(
         model=model,
@@ -403,31 +371,27 @@ def main():
     )
     
     print("Initialized trainer")
-    index2logits_df: pd.DataFrame = trainer.train_and_test()
+    index2logits_df: Optional[pd.DataFrame] = trainer.train_and_test()
 
-    
-    # properly format the output
-    
-    index2logits_df[USERID_DATA_NAME] = index2logits_df[USERID_DATA_NAME].apply(lambda x: f"/user/{x}")
-    print(index2logits_df)
-    
-    index2logits_df.to_csv("index2logits_df.csv")
-    index2logits_list_of_dicts = index2logits_df.to_dict('records')
-    
-    with open(OUTPUT_FILE_NAME, "w") as out_handler:
-        for line in map(ujson.dumps, index2logits_list_of_dicts):
-            print(line, file=out_handler)
-            
-    if not debug_mode:
+
+    if mode == "inference" and not debug_mode:
+        
+        print(f"Predictions:\n{index2logits_df}")
+        index2logits_df.to_csv("index2logits_df.csv")
+        index2logits_list_of_dicts = index2logits_df.to_dict('records')
+
         mr_table_output: dict[str, str] = write_output_to_YT(output=index2logits_list_of_dicts, 
                                                             table_path_root=table_output_root_path)
                 
         with open("MR_TABLE", "w") as out_handler:
-            ujson.dump(mr_table_output, out_handler)
+            json.dump(mr_table_output, out_handler)
     else:
-        print("Debug mode is activated, skipping uploading to YT")
+        if mode == "training" and not debug_mode:
+            print("Mode is `training`, there is no data to load")
+        else:
+            print("Debug mode is activated, skipping uploading to YT")
             
-    copy_out_to_snapshot("checkpoints", dump=True)
+    copy_out_to_snapshot("./", dump=True)
 
 if __name__ == "__main__":
     main()
