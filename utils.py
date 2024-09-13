@@ -123,6 +123,7 @@ class Config:
         return {param_name: getattr(self, param_name) for param_name in params}
 
 
+
 def get_config(config_dir: Path = Path().cwd(), debug_mode=False):
     if debug_mode:
         return Config()  # default options for debugging

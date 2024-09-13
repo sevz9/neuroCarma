@@ -2,10 +2,11 @@ from typing import Any, Optional, Sequence, List, Dict, Mapping
 
 import gc
 import numpy as np
-import json
+import ujson as json
 import pandas as pd
 import yt.wrapper as yt
 
+import time
 OptionalColumns = Optional[Sequence[str]]
 
 
@@ -96,11 +97,15 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                                 format="json", 
                                 unordered=True, 
                                 enable_read_parallel=True,
-                                raw=True)
+                                raw=True,
+                                )
     
     edges_starts = []
     edges_ends = []
     
+    num_rows = get_row_count(mr_table["table"], client)
+    
+    start = time.perf_counter()
     for i, row in enumerate(yt_iterator, 1):
         row = json.loads(row)
         try:
@@ -109,9 +114,11 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
             
             del row
 
-            if i % 500_000 == 0:
-                print(f"Processed {i / 1_000_000}M rows")
+            if i % 1_000_000 == 0:
+                print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
                 gc.collect()
+                
+                start = time.perf_counter()
                 
             
             edges_starts.append(start)
@@ -153,6 +160,9 @@ def make_client(yt_proxy: str = "hahn", max_thread_count: int = 4, enable: bool 
         }
     return yt.YtClient(proxy=yt_proxy, config=config, token=token)
 
+def get_row_count(path: yt.YPath, client: yt.YtClient) -> int:
+    return yt.get_attribute(path=path, attribute="row_count", client=client)
+
 
 def main_prepare_mr_tables(
     features_mr_table: Dict[str, str],
@@ -162,7 +172,7 @@ def main_prepare_mr_tables(
 ):
     print(f"{features_mr_table=}\n{edges_mr_table=}")
     
-    client = make_client(features_mr_table["cluster"], max_thread_count=64, token=token)
+    client = make_client(features_mr_table["cluster"], max_thread_count=128, token=token)
 
     
     PARAMS_OUTPUT = {}
