@@ -335,8 +335,9 @@ def write_output_to_YT(output: list[dict[str, Any]], table_path_root: str = "//h
 
     client = yt.YtClient(proxy="hahn", token=YT_TOKEN)
 
-    random_name = "".join(random.choices(string.ascii_lowercase, k=20))
-    table_path = "{}/table_antifraud_{}".format(table_path_root, random_name)
+    _random_name = "".join(random.choices(string.ascii_lowercase, k=20))
+    
+    table_path = os.path.join(table_path_root, "table_antifraud_{}".format(_random_name))
 
     table_rows: List[Row] = [Row(key=row["key"], score=row["score"]) for row in output]
 
