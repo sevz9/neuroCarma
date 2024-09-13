@@ -183,14 +183,6 @@ def _construct_dgl_graph(
     return graph
 
 
-def get_features_and_labels_from_a_graph(graph: dgl.DGLGraph):
-    mask = graph.ndata[MASK_DATA_NAME].bool()
-
-    features = graph.ndata[FEATURES_DATA_NAME][mask].numpy()
-    labels = graph.ndata[LABELS_DATA_NAME][mask].numpy()
-
-    return features, labels
-
 
 def standard_graph_collate(graph_container):
     graph = graph_container[0]
