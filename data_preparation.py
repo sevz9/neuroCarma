@@ -22,15 +22,16 @@ def _check_for_nans(df):
     assert (total_nans := number_of_nans_per_column.sum() == 0), f"""Found {total_nans} nan values. Please make sure to handle them before passing features to the Py3DL. 
                                                                 Columns with their respective amount of NaNs: {number_of_nans_per_column}"""
 
-def _read_dataframe_from_yt(mr_table):
-    rows = list(yt.read_table(mr_table["table"], format="json", unordered=True, enable_read_parallel=True))
+def _read_dataframe_from_yt(mr_table, client: yt.YtClient):
+    rows = list(client.read_table(mr_table["table"], format="json", unordered=True, enable_read_parallel=True, raw=True))
+    rows = [json.loads(row) for row in rows]
     
     df = pd.DataFrame(rows)
     _check_for_nans(df)
     return df
 
 
-def read_features_table(mr_table, feature_columns_presented_in_train: OptionalColumns = None) -> Dict[str, np.ndarray or Dict[str, np.ndarray]]:
+def read_features_table(mr_table, client: yt.YtClient, feature_columns_presented_in_train: OptionalColumns = None) -> Dict[str, np.ndarray or Dict[str, np.ndarray]]:
 
     def _process_features_columns(df: pd.DataFrame) -> np.ndarray:
         features_df = df[feature_columns]
@@ -55,7 +56,7 @@ def read_features_table(mr_table, feature_columns_presented_in_train: OptionalCo
         return features_df, all_features_names
 
     
-    df = _read_dataframe_from_yt(mr_table)
+    df = _read_dataframe_from_yt(mr_table, client=client)
     
     all_columns = list(df.columns.values)
     feature_columns = list(filter(lambda col: col not in SERVICE_COLUMNS_IN_FEATURES_TABLE, all_columns))
@@ -89,9 +90,9 @@ def read_features_table(mr_table, feature_columns_presented_in_train: OptionalCo
         features_columns=all_features_names,
     )
 
-def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mapping[str, int]) -> Dict[str, np.ndarray]:
+def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mapping[str, int], client: yt.YtClient) -> Dict[str, np.ndarray]:
     
-    yt_iterator = yt.read_table(mr_table["table"],                                                                       
+    yt_iterator = client.read_table(mr_table["table"],                                                                       
                                 format="json", 
                                 unordered=True, 
                                 enable_read_parallel=True,
@@ -128,6 +129,31 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
         col_coords=edges_ends
     )
 
+def make_client(yt_proxy: str = "hahn", max_thread_count: int = 4, enable: bool = True, token=None) -> yt.YtClient:
+    from datetime import timedelta
+    config = {
+        "read_retries": {"enable": enable},
+        "allow_receive_token_by_current_ssh_session": True,
+        "table_writer": {"desired_chunk_size": 1024 * 1024 * 500},
+        "concatenate_retries": {
+            "enable": enable,
+            "total_timeout": timedelta(minutes=128),
+        },
+        "write_retries": {"enable": enable, "count": 30},
+    }
+    if max_thread_count > 1:
+        config["read_parallel"] = {
+            "enable": True,
+            "max_thread_count": max_thread_count,
+        }
+        config["write_parallel"] = {
+            "enable": True,
+            "max_thread_count": max_thread_count,
+            "unordered": True,
+        }
+    return yt.YtClient(proxy=yt_proxy, config=config, token=token)
+
+
 def main_prepare_mr_tables(
     features_mr_table: Dict[str, str],
     edges_mr_table: Dict[str, str],    
@@ -135,24 +161,21 @@ def main_prepare_mr_tables(
     train_metadata: Optional[Dict[str, List[str]]] = None,
 ):
     print(f"{features_mr_table=}\n{edges_mr_table=}")
+    
+    client = make_client(features_mr_table["cluster"], max_thread_count=64, token=token)
 
-    # read all data from first mr table
-    yt.config.config["token"] = token
-    yt.config.config["proxy"]["url"] = features_mr_table["cluster"]
     
     PARAMS_OUTPUT = {}
     
     feature_columns_presented_in_train_df = None if train_metadata is None else train_metadata["features_columns"]
-    data_dict: Dict[str, np.ndarray or Dict[str, np.ndarray]] = read_features_table(mr_table=features_mr_table, feature_columns_presented_in_train=feature_columns_presented_in_train_df)
+    data_dict: Dict[str, np.ndarray or Dict[str, np.ndarray]] = read_features_table(mr_table=features_mr_table, feature_columns_presented_in_train=feature_columns_presented_in_train_df, client=client)
     
     
     print(f"Read train table, extracted features, train/val/test masks and all service columns from features dataframe ({SERVICE_COLUMNS_IN_FEATURES_TABLE})")
     
-    yt.config.config["proxy"]["url"] = edges_mr_table["cluster"]
-
     _node_ids_to_index_mapping = dict(zip(data_dict["node_ids"], range(len(data_dict["node_ids"]))))
     print("Calculated node ids matching with their corresponding indices")
-    adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping)
+    adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client)
     print(f"Obtained adjacency. Number of edges: {len(adjacency_matrix_rows_cols['row_coords'])}")
     
     PARAMS_OUTPUT["features"] = data_dict["features"]
