@@ -1,7 +1,8 @@
 from typing import Any, Optional, Sequence, List, Dict, Mapping
 
+import gc
 import numpy as np
-
+import json
 import pandas as pd
 import yt.wrapper as yt
 
@@ -22,10 +23,10 @@ def _check_for_nans(df):
                                                                 Columns with their respective amount of NaNs: {number_of_nans_per_column}"""
 
 def _read_dataframe_from_yt(mr_table):
-    rows = list(yt.read_table(mr_table["table"], format="yson", unordered=True, enable_read_parallel=True))
+    rows = list(yt.read_table(mr_table["table"], format="json", unordered=True, enable_read_parallel=True))
+    
     df = pd.DataFrame(rows)
     _check_for_nans(df)
-    
     return df
 
 
@@ -89,10 +90,38 @@ def read_features_table(mr_table, feature_columns_presented_in_train: OptionalCo
     )
 
 def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mapping[str, int]) -> Dict[str, np.ndarray]:
-    df = _read_dataframe_from_yt(mr_table)
     
-    edges_starts = df["source"].map(node_id_to_index_mapping).values
-    edges_ends = df["target"].map(node_id_to_index_mapping).values
+    yt_iterator = yt.read_table(mr_table["table"],                                                                       
+                                format="json", 
+                                unordered=True, 
+                                enable_read_parallel=True,
+                                raw=True)
+    
+    edges_starts = []
+    edges_ends = []
+    
+    for i, row in enumerate(yt_iterator, 1):
+        row = json.loads(row)
+        try:
+            start = node_id_to_index_mapping[row["source"]]
+            end = node_id_to_index_mapping[row["target"]]
+            
+            del row
+
+            if i % 500_000 == 0:
+                print(f"Processed {i / 1_000_000}M rows")
+                gc.collect()
+                
+            
+            edges_starts.append(start)
+            edges_ends.append(end)
+            
+            
+        except KeyError:
+            print("Filtered edge with at least one end not presented in features dataframe")
+
+    edges_starts = np.array(edges_starts)
+    edges_ends = np.array(edges_ends)
     
     return dict(
         row_coords=edges_starts,
@@ -122,6 +151,7 @@ def main_prepare_mr_tables(
     yt.config.config["proxy"]["url"] = edges_mr_table["cluster"]
 
     _node_ids_to_index_mapping = dict(zip(data_dict["node_ids"], range(len(data_dict["node_ids"]))))
+    print("Calculated node ids matching with their corresponding indices")
     adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping)
     print(f"Obtained adjacency. Number of edges: {len(adjacency_matrix_rows_cols['row_coords'])}")
     
