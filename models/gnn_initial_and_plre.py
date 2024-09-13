@@ -10,7 +10,8 @@ from torch.nn.parameter import Parameter
 
 
 normalisation_name_to_class = {
-    'batch': nn.BatchNorm1d
+    'batch': nn.BatchNorm1d,
+    'layer': nn.LayerNorm,
 }
 
 activation_name_to_class = {
