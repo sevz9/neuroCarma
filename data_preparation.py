@@ -101,19 +101,19 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                                 raw=True,
                                 )
     
-    edges_starts = np.array([], dtype=np.int32)
-    edges_ends = np.array([], dtype=np.int32)
+    edges_starts = np.array([], dtype=np.uint32)
+    edges_ends = np.array([], dtype=np.uint32)
     
     num_rows = get_row_count(mr_table["table"], client)
     
-    _running_container_for_sources: List[np.int32] = []
-    _running_container_for_finishes: List[np.int32] = []
+    _running_container_for_sources: List[np.uint32] = []
+    _running_container_for_finishes: List[np.uint32] = []
     
     for i, row in enumerate(yt_iterator, 1):
         row = json.loads(row)
         try:
-            start = np.int32(node_id_to_index_mapping[row["source"]])
-            end = np.int32(node_id_to_index_mapping[row["target"]])
+            start = np.uint32(node_id_to_index_mapping[row["source"]])
+            end = np.uint32(node_id_to_index_mapping[row["target"]])
             
             
             if i % 1_000_000 == 0:
@@ -129,8 +129,8 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                 edges_ends = np.concatenate([edges_ends, _running_container_for_finishes])
                 gc.collect()
 
-                _running_container_for_sources: List[np.int32] = []
-                _running_container_for_finishes: List[np.int32] = []
+                _running_container_for_sources: List[np.uint32] = []
+                _running_container_for_finishes: List[np.uint32] = []
                 
                 gc.collect()
 
