@@ -100,33 +100,48 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                                 raw=True,
                                 )
     
-    edges_starts = []
-    edges_ends = []
+    edges_starts = np.array([], dtype=np.int32)
+    edges_ends = np.array([], dtype=np.int32)
     
     num_rows = get_row_count(mr_table["table"], client)
     
-    start = time.perf_counter()
+    _running_container_for_sources: List[np.int32] = []
+    _running_container_for_finishes: List[np.int32] = []
+    
     for i, row in enumerate(yt_iterator, 1):
         row = json.loads(row)
         try:
-            start = node_id_to_index_mapping[row["source"]]
-            end = node_id_to_index_mapping[row["target"]]
+            start = np.int32(node_id_to_index_mapping[row["source"]])
+            end = np.int32(node_id_to_index_mapping[row["target"]])
             
-            del row
-
+            
             if i % 1_000_000 == 0:
                 print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
                 gc.collect()
                 
-                start = time.perf_counter()
-                
             
-            edges_starts.append(start)
-            edges_ends.append(end)
+            if i % 20_000_000 == 0: # merge containers
+                
+                edges_starts = np.concatenate([edges_starts, _running_container_for_sources])
+                gc.collect()
+
+                edges_starts = np.concatenate([edges_ends, _running_container_for_finishes])
+                gc.collect()
+
+                _running_container_for_sources: List[np.int32] = []
+                _running_container_for_finishes: List[np.int32] = []
+                
+                gc.collect()
+
+            else:
+                _running_container_for_sources.append(start)
+                _running_container_for_finishes.append(end)
             
             
         except KeyError:
             print("Filtered edge with at least one end not presented in features dataframe")
+        finally:
+            del row
 
     edges_starts = np.array(edges_starts)
     edges_ends = np.array(edges_ends)
