@@ -39,7 +39,7 @@ YT_TOKEN = os.environ.get("YT_TOKEN")
 @dataclass
 class Config:
     # Data options
-    remove_self_loops: bool = True
+    remove_self_loops: bool = False
     table_output_root_path: str = "//tmp/"
     model_type: str = "GNN"
 
@@ -163,7 +163,6 @@ def _construct_dgl_graph(
     val_mask: np.ndarray,
     test_mask: np.ndarray,
 ):
-    # TODO Redo here
     row_coordinates, col_coordinates = (
         adjacency_matrix_rows_cols["row_coords"],
         adjacency_matrix_rows_cols["col_coords"],
@@ -171,7 +170,11 @@ def _construct_dgl_graph(
 
     row_coordinates = torch.tensor(row_coordinates).long()
     col_coordinates = torch.tensor(col_coordinates).long()
+    
+    assert len(row_coordinates) == len(col_coordinates)
     graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.int32, num_nodes=len(node_ids))
+    graph = dgl.to_simple(graph, writeback_mapping=False)
+    
     graph.ndata[FEATURES_DATA_NAME] = torch.tensor(features, dtype=torch.float32)
     graph.ndata[LABELS_DATA_NAME] = torch.tensor(targets, dtype=torch.float32).reshape(-1, 1)
 
@@ -181,6 +184,8 @@ def _construct_dgl_graph(
 
     graph.ndata[NODE_ID_DATA_NAME] = torch.tensor(node_ids, dtype=torch.long).reshape(-1, 1)
 
+    print(f"{graph.num_edges()=} {graph.num_nodes()=}")
+    
     return graph
 
 
