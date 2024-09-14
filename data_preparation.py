@@ -1,5 +1,6 @@
 from typing import Any, Optional, Sequence, List, Dict, Mapping
 
+import ytreader
 import gc
 import numpy as np
 import ujson as json
@@ -125,7 +126,7 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                 edges_starts = np.concatenate([edges_starts, _running_container_for_sources])
                 gc.collect()
 
-                edges_starts = np.concatenate([edges_ends, _running_container_for_finishes])
+                edges_ends = np.concatenate([edges_ends, _running_container_for_finishes])
                 gc.collect()
 
                 _running_container_for_sources: List[np.int32] = []
