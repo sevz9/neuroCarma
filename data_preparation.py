@@ -149,7 +149,7 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                 
 
             
-            if i % 20_000_000 == 0: # merge containers
+            if i % 200_000_000 == 0: # merge containers
                 
                 edges_starts = np.concatenate([edges_starts, _running_container_for_sources])
                 gc.collect()
