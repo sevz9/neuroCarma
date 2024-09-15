@@ -146,8 +146,6 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
             if i % 1_000_000 == 0:
                 print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
                 gc.collect()
-                
-
             
             if i % 200_000_000 == 0: # merge containers
                 
@@ -174,8 +172,23 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
         finally:
             del row
 
-    # edges_starts = np.array(edges_starts)
-    # edges_ends = np.array(edges_ends)
+    edges_starts = np.concatenate([edges_starts, _running_container_for_sources])
+    gc.collect()
+
+    edges_ends = np.concatenate([edges_ends, _running_container_for_finishes])
+    gc.collect()
+
+    _running_container_for_sources: List[np.int64] = []
+    _running_container_for_finishes: List[np.int64] = []
+    
+    gc.collect()
+    
+    # TODO save checkpoints
+    np.savez_compressed("checkpoints/edge_index", **dict(edges_starts=edges_starts, edges_ends=edges_ends))
+    loading_metadata["edge_index_rows_loaded"] = i
+    json.dump(loading_metadata, open(_loading_metadata_path, "w"))
+    copy_out_to_snapshot("./", dump=True)    
+    
     
     return dict(
         row_coords=edges_starts,
@@ -257,8 +270,24 @@ def main_prepare_mr_tables(
     
     
     # TODO check whether you should start from the beginning or not
-    adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client,
-                                                                    _loading_metadata_path=_loading_metadata_path, loading_metadata=loading_metadata)
+    if loading_metadata.get("adjacency_loaded"):
+        edge_index_processed = np.load("checkpoints/edge_index.npz")
+        
+        edges_starts = edge_index_processed["edges_starts"]
+        edges_ends = edge_index_processed["edges_ends"]
+        
+        adjacency_matrix_rows_cols= dict(row_coords=edges_starts,col_coords=edges_ends)
+        
+    else:
+        adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client,
+                                                                        _loading_metadata_path=_loading_metadata_path, loading_metadata=loading_metadata)
+        
+        loading_metadata["adjacency_loaded"] = True
+    json.dump(loading_metadata, open(_loading_metadata_path, "w"))
+    copy_out_to_snapshot("./", dump=True)
+    
+    print("Dumped edges information to snapshot")
+
     print(f"Obtained adjacency. Number of edges: {len(adjacency_matrix_rows_cols['row_coords'])}")
     
     PARAMS_OUTPUT["features"] = data_dict["features"]
