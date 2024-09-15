@@ -12,7 +12,6 @@ import joblib
 import time
 OptionalColumns = Optional[Sequence[str]]
 
-
 from nirvana_utils import copy_out_to_snapshot, copy_snapshot_to_out
 
 KEY_COLUMN = "key"
@@ -77,10 +76,11 @@ def read_features_table(mr_table, client: yt.YtClient, feature_columns_presented
     features_values, all_features_names = _process_features_columns(df)
     
     key_column_values = df[KEY_COLUMN].values
-    target_column_values = df[TARGET_COLUMN].values
+    target_column_values = df[TARGET_COLUMN].values.reshape(-1)
     train_mask_column_values = df[TRAIN_MASK_COLUMN].values.astype(bool)
     val_mask_column_values = df[VAL_MASK_COLUMN].values.astype(bool)
     test_mask_column_values = df[TEST_MASK_COLUMN].values.astype(bool)
+    
     
     print(f"{features_values.shape=}, {features_values=}")
     
@@ -97,17 +97,24 @@ def read_features_table(mr_table, client: yt.YtClient, feature_columns_presented
     )
 
 def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mapping[str, int], client: yt.YtClient,
-                                       _loading_metadata_path: str, loading_metadata: Dict[str, bool or int]) -> Dict[str, np.ndarray]:
+                                       _loading_metadata_path: str, loading_metadata: Dict[str, bool or int]) -> str:
     
     
+    def append_edges_and_make_checkpoint(running_container: List[List[int]], row_number):
+        with open("checkpoints/dataset/edges.csv", "a") as edges_file_handler:
+            df_partial = pd.DataFrame(running_container).astype(np.int64)
+            df_partial.to_csv(edges_file_handler, index=False, header=False)
+        
+        
+        loading_metadata["edge_index_rows_loaded"] = row_number
+        json.dump(loading_metadata, open(_loading_metadata_path, "w"))
+        copy_out_to_snapshot("./", dump=True)
+        
+        print(f"Saved checkpoint at {row_number}-th row")
+        
+        del df_partial
     
     rows_already_loaded = loading_metadata["edge_index_rows_loaded"]
-    
-
-    # "checkpoints/edges_starts"
-    # "checkpoints/edges_ends"
-
-    
     yt_iterator = client.read_table(yt.TablePath(mr_table["table"], start_index=rows_already_loaded),                                                                       
                                 format="json", 
                                 unordered=False, 
@@ -116,84 +123,38 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                                 )
     
     num_rows = get_row_count(mr_table["table"], client)
-
-    if rows_already_loaded > 0:
-        edge_index_processed = np.load("checkpoints/edge_index.npz")
-        
-        edges_starts = edge_index_processed["edges_starts"]
-        edges_ends = edge_index_processed["edges_ends"]
-        
-    else:
-        edges_starts = np.array([], dtype=np.int64)
-        edges_ends = np.array([], dtype=np.int64)
     
-    
-    _running_container_for_sources: List[np.int64] = []
-    _running_container_for_finishes: List[np.int64] = []
-    
-    # TODO skip some rows after restart
+    running_container: List[List[int]] = []
     
     for i, row in enumerate(yt_iterator, rows_already_loaded+1):
         row = json.loads(row)
         try:
-            start = np.int64(node_id_to_index_mapping[row["source"]])
-            end = np.int64(node_id_to_index_mapping[row["target"]])
+            start = node_id_to_index_mapping[row["source"]]
+            end = node_id_to_index_mapping[row["target"]]
             
-            _running_container_for_sources.append(start)
-            _running_container_for_finishes.append(end)
-
+            running_container.append([start, end])
             
-            if i % 1_000_000 == 0:
+            if i % 10_000_000 == 0:
                 print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
                 gc.collect()
             
-            if i % 200_000_000 == 0: # merge containers
-                
-                edges_starts = np.concatenate([edges_starts, _running_container_for_sources])
-                gc.collect()
+                if i % 100_000_000 == 0: # merge containers
+                    append_edges_and_make_checkpoint(running_container, i)
+                    running_container = []
+                    gc.collect()
 
-                edges_ends = np.concatenate([edges_ends, _running_container_for_finishes])
-                gc.collect()
 
-                _running_container_for_sources: List[np.int64] = []
-                _running_container_for_finishes: List[np.int64] = []
-                
-                gc.collect()
-                
-                # TODO save checkpoints
-                np.savez_compressed("checkpoints/edge_index", **dict(edges_starts=edges_starts, edges_ends=edges_ends))
-                loading_metadata["edge_index_rows_loaded"] = i
-                json.dump(loading_metadata, open(_loading_metadata_path, "w"))
-                copy_out_to_snapshot("./", dump=True)    
-
-            
         except KeyError:
             print("Filtered edge with at least one end not presented in features dataframe")
         finally:
             del row
 
-    edges_starts = np.concatenate([edges_starts, _running_container_for_sources])
-    gc.collect()
-
-    edges_ends = np.concatenate([edges_ends, _running_container_for_finishes])
-    gc.collect()
-
-    _running_container_for_sources: List[np.int64] = []
-    _running_container_for_finishes: List[np.int64] = []
+    if running_container:
+        append_edges_and_make_checkpoint(running_container, i)
     
-    gc.collect()
-    
-    # TODO save checkpoints
-    np.savez_compressed("checkpoints/edge_index", **dict(edges_starts=edges_starts, edges_ends=edges_ends))
-    loading_metadata["edge_index_rows_loaded"] = i
-    json.dump(loading_metadata, open(_loading_metadata_path, "w"))
-    copy_out_to_snapshot("./", dump=True)    
-    
-    
-    return dict(
-        row_coords=edges_starts,
-        col_coords=edges_ends
-    )
+    print(f"Saved graph structure. Obtained edges: {rows_already_loaded+1}")
+        
+    return "checkpoints/dataset/edges.csv"
 
 def make_client(yt_proxy: str = "hahn", max_thread_count: int = 4, enable: bool = True, token=None) -> yt.YtClient:
     from datetime import timedelta
@@ -271,24 +232,19 @@ def main_prepare_mr_tables(
     
     # TODO check whether you should start from the beginning or not
     if loading_metadata.get("adjacency_loaded"):
-        edge_index_processed = np.load("checkpoints/edge_index.npz")
         
-        edges_starts = edge_index_processed["edges_starts"]
-        edges_ends = edge_index_processed["edges_ends"]
-        
-        adjacency_matrix_rows_cols= dict(row_coords=edges_starts,col_coords=edges_ends)
-        
+        edges_file = "checkpoints/edges.csv"
     else:
-        adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client,
+        edges_file = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client,
                                                                         _loading_metadata_path=_loading_metadata_path, loading_metadata=loading_metadata)
         
         loading_metadata["adjacency_loaded"] = True
+    
     json.dump(loading_metadata, open(_loading_metadata_path, "w"))
     copy_out_to_snapshot("./", dump=True)
     
     print("Dumped edges information to snapshot")
 
-    print(f"Obtained adjacency. Number of edges: {len(adjacency_matrix_rows_cols['row_coords'])}")
     
     PARAMS_OUTPUT["features"] = data_dict["features"]
     PARAMS_OUTPUT["targets"] = data_dict["targets"]
@@ -299,7 +255,7 @@ def main_prepare_mr_tables(
     
 
     PARAMS_OUTPUT["masks"] = data_dict["masks"]
-    PARAMS_OUTPUT["adjacency_matrix_rows_cols"] = adjacency_matrix_rows_cols
+    PARAMS_OUTPUT["edges_file"] = edges_file
 
 
     PARAMS_OUTPUT["train_metadata"] = dict(features_columns=data_dict["features_columns"])

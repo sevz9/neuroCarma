@@ -136,13 +136,19 @@ class GraphConvolutionLayer(nn.Module):
         out = self.normalisation(features)
         conv = self.convolution(graph, out)
         
+        num_dst_nodes = conv.shape[0]
+        
+        # assert torch.all(torch.arange(num_dst_nodes) == graph.dstnodes().cpu())
+        
+        # try:
         if self.apply_skip_connection:
-            out = conv + out
+            out = conv + out[:num_dst_nodes, ...] # apply skip connection only to dst nodes
         else:
             out  = conv
         
         x = self.activation(out)
-
+        # except RuntimeError:
+        #     breakpoint()
         
         return x
         
@@ -203,10 +209,10 @@ class GraphNeuralNetwork(nn.Module):
             ) for idx in range(len(predictor_feature_list) - 1)
         ])
 
-    def forward(self, graph, features, *args, **kwargs):
+    def forward(self, message_flow_graphs, features, *args, **kwargs):
         out = self.preprocessing(features)
-        for convolution in self.encoder:
-            out = convolution(graph, out)
+        for convolution, mfg in zip(self.encoder, message_flow_graphs):
+            out = convolution(mfg, out)
             
         out = self.predictor(out)
         return out
@@ -293,15 +299,15 @@ class GNNWithPLREmbeddings(nn.Module):
             ) for idx in range(len(predictor_feature_list) - 1)
         ])
 
-    def forward(self, graph, features, *args, **kwargs):
+    def forward(self, message_flow_graphs, features, *args, **kwargs):
         
         features_transformed = self.features_encoder(features).view(features.shape[0], -1)
         features_transformed = F.relu(self.projection(features_transformed))
         
         out = self.preprocessing(features_transformed)
         
-        for convolution in self.encoder:
-            out = convolution(graph, out)
+        for convolution, mfg in zip(self.encoder, message_flow_graphs):
+            out = convolution(mfg, out)
 
         out = self.predictor(out)
         

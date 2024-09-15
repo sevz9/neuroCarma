@@ -5,6 +5,9 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, List, Optional, Dict, ClassVar
+import gc
+
+import dgl.graphbolt as gb
 
 from pydantic import validate_arguments
 from dataclasses import dataclass
@@ -16,7 +19,6 @@ import torch
 import json
 import yt.wrapper as yt
 from sklearn.preprocessing import StandardScaler
-
 sys.path.append("./")
 
 from data_preparation import main_prepare_mr_tables
@@ -34,12 +36,11 @@ NODE_ID_DATA_NAME = "key"
 
 YT_TOKEN = os.environ.get("YT_TOKEN")
 
-# TODO Convolution parameters proper handling
 @validate_arguments
 @dataclass
 class Config:
     # Data options
-    remove_self_loops: bool = False
+    # remove_self_loops: bool = False
     table_output_root_path: str = "//tmp/"
     model_type: str = "GNN"
 
@@ -48,7 +49,7 @@ class Config:
     num_epochs: int = 2
     max_num_neighbors: int = -1  # -1 for all neighbors to be sampled
 
-    num_workers: int = 12
+    num_workers: int = 1
     learning_rate: float = 0.0003
     weight_decay: float = 0.00001
 
@@ -154,125 +155,140 @@ def _scale_features(features: np.ndarray, scaler_state_file: Path = None):
     return transformed_features, scaler
 
 
-def _construct_dgl_graph(
-    adjacency_matrix_rows_cols,
-    features: np.ndarray,
-    targets: np.ndarray,
-    node_ids: np.ndarray,
-    train_mask: np.ndarray,
-    val_mask: np.ndarray,
-    test_mask: np.ndarray,
-):
-    row_coordinates, col_coordinates = (
-        adjacency_matrix_rows_cols["row_coords"],
-        adjacency_matrix_rows_cols["col_coords"],
-    )
 
-    row_coordinates = torch.tensor(row_coordinates).long()
-    col_coordinates = torch.tensor(col_coordinates).long()
+def create_graphbolt_dataloader(graph, features, train_val_test_set, bath_size, fanouts_list, shuffle, node_feature_keys, device, num_workers):
+    datapipe = gb.ItemSampler(train_val_test_set, batch_size=bath_size, shuffle=shuffle)
+    datapipe = datapipe.sample_neighbor(graph, fanouts_list)
     
-    assert len(row_coordinates) == len(col_coordinates)
-    graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.long, num_nodes=len(node_ids))
-    graph = dgl.to_simple(graph, writeback_mapping=False)
+    datapipe = datapipe.fetch_feature(features, node_feature_keys=node_feature_keys)
+    datapipe = datapipe.copy_to(device)
+    dataloader = gb.DataLoader(datapipe, num_workers=num_workers)
     
-    graph.ndata[FEATURES_DATA_NAME] = torch.tensor(features, dtype=torch.float32)
-    graph.ndata[LABELS_DATA_NAME] = torch.tensor(targets, dtype=torch.float32).reshape(-1, 1)
-
-    graph.ndata[TRAIN_MASK_DATA_NAME] = torch.tensor(train_mask, dtype=torch.bool).reshape(-1, 1)
-    graph.ndata[VAL_MASK_DATA_NAME] = torch.tensor(val_mask, dtype=torch.bool).reshape(-1, 1)
-    graph.ndata[TEST_MASK_DATA_NAME] = torch.tensor(test_mask, dtype=torch.bool).reshape(-1, 1)
-
-    graph.ndata[NODE_ID_DATA_NAME] = torch.tensor(node_ids, dtype=torch.long).reshape(-1, 1)
-
-    print(f"{graph.num_edges()=} {graph.num_nodes()=}")
-    
-    return graph
-
-
-
-def standard_graph_collate(graph_container):
-    graph = graph_container[0]
-
-    features = graph.ndata["features"]
-    labels = graph.ndata["labels"]
-    mask = graph.ndata["mask"]
-
-    return graph, features, labels, mask
-
-
-def init_dataloader(
-    graph: dgl.DGLGraph,
-    sampler: dgl.dataloading.Sampler,
-    device: str = "cpu",
-    shuffle: bool = True,
-    batch_size: int = 10_000,
-    num_workers: int = 12,
-):
-    dataloader = dgl.dataloading.DataLoader(
-        graph=graph,
-        indices=torch.arange(graph.num_nodes(), dtype=torch.int32),
-        device=device,
-        graph_sampler=sampler,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        batch_size=batch_size,
-        drop_last=False,
-        use_prefetch_thread=True,
-        pin_prefetcher=True,
-    )
-
     return dataloader
+# def _construct_dgl_graph(
+#     adjacency_matrix_rows_cols,
+#     features: np.ndarray,
+#     targets: np.ndarray,
+#     node_ids: np.ndarray,
+#     train_mask: np.ndarray,
+#     val_mask: np.ndarray,
+#     test_mask: np.ndarray,
+# ):
+#     row_coordinates, col_coordinates = (
+#         adjacency_matrix_rows_cols["row_coords"],
+#         adjacency_matrix_rows_cols["col_coords"],
+#     )
+
+#     row_coordinates = torch.tensor(row_coordinates).long()
+#     col_coordinates = torch.tensor(col_coordinates).long()
+    
+#     assert len(row_coordinates) == len(col_coordinates)
+#     graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.long, num_nodes=len(node_ids))
+#     graph = dgl.to_simple(graph, writeback_mapping=False)
+    
+#     graph.ndata[FEATURES_DATA_NAME] = torch.tensor(features, dtype=torch.float32)
+#     graph.ndata[LABELS_DATA_NAME] = torch.tensor(targets, dtype=torch.float32).reshape(-1, 1)
+
+#     graph.ndata[TRAIN_MASK_DATA_NAME] = torch.tensor(train_mask, dtype=torch.bool).reshape(-1, 1)
+#     graph.ndata[VAL_MASK_DATA_NAME] = torch.tensor(val_mask, dtype=torch.bool).reshape(-1, 1)
+#     graph.ndata[TEST_MASK_DATA_NAME] = torch.tensor(test_mask, dtype=torch.bool).reshape(-1, 1)
+
+#     graph.ndata[NODE_ID_DATA_NAME] = torch.tensor(node_ids, dtype=torch.long).reshape(-1, 1)
+
+#     print(f"{graph.num_edges()=} {graph.num_nodes()=}")
+    
+#     return graph
 
 
-def construct_subgraph_from_blocks(
-    blocks: list[Any],
-    batch_size: int,
-    node_attributes_to_copy: list[str],
-    device: str,
-) -> dgl.DGLGraph:
-    """
-    Constructs a copy of a Message flow graphs (MFG), defined as a list of MFGs.
 
-    NOTE: this function is an example of constructing graph for node classification tasks, graph obly contains node features
+# def standard_graph_collate(graph_container):
+#     graph = graph_container[0]
+
+#     features = graph.ndata["features"]
+#     labels = graph.ndata["labels"]
+#     mask = graph.ndata["mask"]
+
+#     return graph, features, labels, mask
 
 
-    params:
+# def init_dataloader(
+#     graph: dgl.DGLGraph,
+#     sampler: dgl.dataloading.Sampler,
+#     device: str = "cpu",
+#     shuffle: bool = True,
+#     batch_size: int = 10_000,
+#     num_workers: int = 12,
+# ):
+#     dataloader = dgl.dataloading.DataLoader(
+#         graph=graph,
+#         indices=torch.arange(graph.num_nodes(), dtype=torch.int32),
+#         device=device,
+#         graph_sampler=sampler,
+#         shuffle=shuffle,
+#         num_workers=num_workers,
+#         batch_size=batch_size,
+#         drop_last=False,
+#         use_prefetch_thread=True,
+#         pin_prefetcher=True,
+#     )
 
-    `blocks`: list of consecutive message flow graphs, len(blocks) == number of layers in graph convolution
-    `batch_size`: number of destination nodes
-    `node_attributes_to_copy`: list of names of node attributes to copy to a new graph
-    """
+#     return dataloader
 
-    merged_block = deepcopy(dgl.merge([dgl.block_to_graph(b) for b in blocks]))
-    # merged_block = dgl.merge([dgl.block_to_graph(b) for b in blocks])
 
-    row_coords, col_coords = merged_block.edges()
+# def construct_subgraph_from_blocks(
+#     blocks: list[Any],
+#     batch_size: int,
+#     node_attributes_to_copy: list[str],
+#     device: str,
+# ) -> dgl.DGLGraph:
+#     """
+#     Constructs a copy of a Message flow graphs (MFG), defined as a list of MFGs.
 
-    number_of_nodes = merged_block.srcdata[FEATURES_DATA_NAME].shape[0]
+#     NOTE: this function is an example of constructing graph for node classification tasks, graph obly contains node features
 
-    new_graph = dgl.graph(data=(row_coords, col_coords), num_nodes=number_of_nodes)
 
-    for node_data_name in node_attributes_to_copy:
-        try:
-            new_graph.ndata[node_data_name] = merged_block.srcdata[node_data_name]
-        except dgl._ffi.base.DGLError as e:
-            print(
-                f"{node_data_name=} {merged_block.srcdata[node_data_name].shape=} {new_graph.num_nodes()=} {merged_block.num_nodes()=}"
-            )
-            raise e
+#     params:
 
-    # create mask marking only destination nodes, which are needed for
-    num_of_nodes = new_graph.num_nodes()
-    output_mask = torch.zeros(num_of_nodes).bool()
-    output_mask[:batch_size] = True
-    new_graph.ndata[OUTPUT_MASK_NAME] = output_mask.to(device)
+#     `blocks`: list of consecutive message flow graphs, len(blocks) == number of layers in graph convolution
+#     `batch_size`: number of destination nodes
+#     `node_attributes_to_copy`: list of names of node attributes to copy to a new graph
+#     """
 
-    del merged_block
+#     merged_block = deepcopy(dgl.merge([dgl.block_to_graph(b) for b in blocks]))
+#     # merged_block = dgl.merge([dgl.block_to_graph(b) for b in blocks])
 
-    return new_graph.to(device)
+#     row_coords, col_coords = merged_block.edges()
+
+#     number_of_nodes = merged_block.srcdata[FEATURES_DATA_NAME].shape[0]
+
+#     new_graph = dgl.graph(data=(row_coords, col_coords), num_nodes=number_of_nodes)
+
+#     for node_data_name in node_attributes_to_copy:
+#         try:
+#             new_graph.ndata[node_data_name] = merged_block.srcdata[node_data_name]
+#         except dgl._ffi.base.DGLError as e:
+#             print(
+#                 f"{node_data_name=} {merged_block.srcdata[node_data_name].shape=} {new_graph.num_nodes()=} {merged_block.num_nodes()=}"
+#             )
+#             raise e
+
+#     # create mask marking only destination nodes, which are needed for
+#     num_of_nodes = new_graph.num_nodes()
+#     output_mask = torch.zeros(num_of_nodes).bool()
+#     output_mask[:batch_size] = True
+#     new_graph.ndata[OUTPUT_MASK_NAME] = output_mask.to(device)
+
+#     del merged_block
+
+#     return new_graph.to(device)
 
 
 def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None):
+    # save all files in a special directory and thus preprocess graph
+    dataset_base_dir = "checkpoints/dataset/"
+    os.makedirs(dataset_base_dir, exist_ok=True)
+
+
     scaler_state_filename: Path = data_dir / "scaler.bin"
     json_input_filename: Path = data_dir / "JSON_INPUT.json"
 
@@ -294,16 +310,13 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
             loading_metadata = json.load(handler)
             
             features_table_loaded = loading_metadata["features_table_loaded"]
-            edge_index_rows_loaded = loading_metadata["edge_index_rows_loaded"]
-            
-            
-            
+            edge_index_rows_loaded = loading_metadata["edge_index_rows_loaded"]            
     else:
         features_table_loaded = False
         edge_index_rows_loaded = 0
     
     print(f"Optional graceful restart is available: {features_table_loaded=}, edge_index_rows_loaded={edge_index_rows_loaded/1e6}M")
-
+    
     input_dict = main_prepare_mr_tables(
         features_mr_table=features_mr_table,
         edges_mr_table=edges_mr_table,
@@ -317,34 +330,137 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
 
     masks_dict: dict[str, np.ndarray] = input_dict["masks"]
 
-    test_mask = masks_dict["test_mask"]
-    train_mask = masks_dict["train_mask"]
-    val_mask = masks_dict["val_mask"]
 
-    features = input_dict[FEATURES_DATA_NAME]
+
+    test_mask = masks_dict["test_mask"].astype(bool)
+    train_mask = masks_dict["train_mask"].astype(bool)
+    val_mask = masks_dict["val_mask"].astype(bool)
+
+    features = input_dict[FEATURES_DATA_NAME].astype(np.float32)
     features, scaler = _scale_features(
         features=features,
         scaler_state_file=scaler_state_filename,
     )
+    num_features = features.shape[1]
 
-    targets = input_dict["targets"]
-    adjacency = input_dict["adjacency_matrix_rows_cols"]
+
+    targets = input_dict["targets"].astype(np.float32)
+    edges_file = input_dict["edges_file"]
     node_indices = input_dict["node_indices"]
-    
+    node_ids = input_dict["node_ids"]
     node_index_to_id_mapper = input_dict["node_index_to_id_mapper"]
     
+    
+    
+    # convert pandas edges table (which is very convenient though) to numpy array as pandas reader reads them in int32 format.
+    # import pandas as pd
+    # edges_numpy = pd.read_csv(edges_file, dtype=np.int64).values.T
+    gc.collect()
+    # breakpoint()
+    edges_path_new = edges_file # os.path.join(dataset_base_dir, "edges.npy")
 
-    graph = _construct_dgl_graph(
-        adjacency_matrix_rows_cols=adjacency,
-        features=features,
-        targets=targets,
-        node_ids=node_indices,
-        train_mask=train_mask,
-        val_mask=val_mask,
-        test_mask=test_mask
-    )
+    features_path = os.path.join(dataset_base_dir, "features.npy")
+    node_indices_path = os.path.join(dataset_base_dir, "node_ids.npy")
+    
+    train_node_indices_path = os.path.join(dataset_base_dir, "train_node_indices.npy")
+    val_node_indices_path = os.path.join(dataset_base_dir, "val_node_indices.npy")
+    test_node_indices_path = os.path.join(dataset_base_dir, "test_node_indices.npy")
 
-    return graph, scaler, input_dict["train_metadata"], node_index_to_id_mapper
+    train_labels_path = os.path.join(dataset_base_dir, "train_labels.npy")
+    val_labels_path = os.path.join(dataset_base_dir, "val_labels.npy")
+    test_labels_path = os.path.join(dataset_base_dir, "test_labels.npy")
+
+    
+    train_node_indices = node_indices[train_mask].astype(np.int64)
+    val_node_indices = node_indices[val_mask].astype(np.int64)
+    test_node_indices = node_indices[test_mask].astype(np.int64)
+    
+    train_labels = targets[train_mask]
+    val_labels = targets[val_mask]
+    test_labels = targets[test_mask]
+    
+    if len(test_node_indices) == 0:
+        test_node_indices = val_node_indices
+        test_labels = val_labels
+    
+    for file, filepath in [(features, features_path),
+                        #    (node_indices, node_indices_path),
+                           (train_node_indices, train_node_indices_path),
+                           (val_node_indices, val_node_indices_path),
+                           (test_node_indices, test_node_indices_path),
+                           (train_labels, train_labels_path),
+                           (val_labels, val_labels_path),
+                           (test_labels, test_labels_path),
+                        #    (edges_numpy, edges_path_new)
+                           ]:
+        np.save(filepath, file)
+        
+        del file
+        gc.collect()
+        
+        print(f"Saved part of raw graph data to {filepath}")
+
+
+    yaml_content = f"""
+dataset_name: antifraud_graph
+graph:
+  nodes:
+    - num: {features.shape[0]}
+  edges:
+    - format: csv
+      path: {os.path.basename(edges_path_new)}
+feature_data:
+  - domain: node
+    name: features
+    format: numpy
+    path: {os.path.basename(features_path)}
+
+tasks:
+  - name: node_classification
+    num_classes: 2
+    train_set:
+      - data:
+          - name: seed_nodes
+            format: numpy
+            path: {os.path.basename(train_node_indices_path)}
+          - name: labels
+            format: numpy
+            path: {os.path.basename(train_labels_path)}
+    validation_set:
+      - data:
+          - name: seed_nodes
+            format: numpy
+            path: {os.path.basename(val_node_indices_path)}
+          - name: labels
+            format: numpy
+            path: {os.path.basename(val_labels_path)}
+    test_set:
+      - data:
+          - name: seed_nodes
+            format: numpy
+            path: {os.path.basename(test_node_indices_path)}
+          - name: labels
+            format: numpy
+            path: {os.path.basename(test_labels_path)}
+"""
+    print(yaml_content)
+
+    metadata_path = os.path.join(dataset_base_dir, "metadata.yaml")
+    with open(metadata_path, "w") as f:
+        f.write(yaml_content)
+        
+    dataset = gb.OnDiskDataset(dataset_base_dir, auto_cast_to_optimal_dtype=False).load()
+
+    graph = dataset.graph
+    print(f"Loaded graph: {graph}\n")
+    feature = dataset.feature
+    print(f"Loaded feature store: {feature}\n")
+
+    tasks = dataset.tasks
+    nc_task = tasks[0]
+    print(f"Loaded node classification task: {nc_task}\n")    
+    
+    return dataset, num_features, scaler, input_dict["train_metadata"], node_index_to_id_mapper
 
 
 def write_output_to_YT(output: list[dict[str, Any]], table_path_root: str = "//home/yr/fvelikon/tmp") -> dict[str, str]:
@@ -370,3 +486,4 @@ def write_output_to_YT(output: list[dict[str, Any]], table_path_root: str = "//h
     mr_table = dict(cluster="hahn", table=table_path)
 
     return mr_table
+
