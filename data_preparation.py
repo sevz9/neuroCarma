@@ -11,6 +11,8 @@ import time
 OptionalColumns = Optional[Sequence[str]]
 
 
+from nirvana_utils import copy_out_to_snapshot, copy_snapshot_to_out
+
 KEY_COLUMN = "key"
 TARGET_COLUMN = "target"
 TRAIN_MASK_COLUMN = "train_mask"
@@ -101,19 +103,21 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                                 raw=True,
                                 )
     
-    edges_starts = np.array([], dtype=np.uint32)
-    edges_ends = np.array([], dtype=np.uint32)
+    edges_starts = np.array([], dtype=np.int64)
+    edges_ends = np.array([], dtype=np.int64)
     
     num_rows = get_row_count(mr_table["table"], client)
     
-    _running_container_for_sources: List[np.uint32] = []
-    _running_container_for_finishes: List[np.uint32] = []
+    _running_container_for_sources: List[np.int64] = []
+    _running_container_for_finishes: List[np.int64] = []
+    
+    # TODO skip some rows after restart
     
     for i, row in enumerate(yt_iterator, 1):
         row = json.loads(row)
         try:
-            start = np.uint32(node_id_to_index_mapping[row["source"]])
-            end = np.uint32(node_id_to_index_mapping[row["target"]])
+            start = np.int64(node_id_to_index_mapping[row["source"]])
+            end = np.int64(node_id_to_index_mapping[row["target"]])
             
             
             if i % 1_000_000 == 0:
@@ -129,10 +133,12 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                 edges_ends = np.concatenate([edges_ends, _running_container_for_finishes])
                 gc.collect()
 
-                _running_container_for_sources: List[np.uint32] = []
-                _running_container_for_finishes: List[np.uint32] = []
+                _running_container_for_sources: List[np.int64] = []
+                _running_container_for_finishes: List[np.int64] = []
                 
                 gc.collect()
+                
+                # TODO save checkpoints
 
             else:
                 _running_container_for_sources.append(start)
@@ -193,7 +199,9 @@ def main_prepare_mr_tables(
     
     PARAMS_OUTPUT = {}
     
+    # TODO check whether features are already processed and load them
     feature_columns_presented_in_train_df = None if train_metadata is None else train_metadata["features_columns"]
+    
     data_dict: Dict[str, np.ndarray or Dict[str, np.ndarray]] = read_features_table(mr_table=features_mr_table, feature_columns_presented_in_train=feature_columns_presented_in_train_df, client=client)
     
     
@@ -201,6 +209,8 @@ def main_prepare_mr_tables(
     
     _node_ids_to_index_mapping = dict(zip(data_dict["node_ids"], range(len(data_dict["node_ids"]))))
     print("Calculated node ids matching with their corresponding indices")
+    
+    # TODO check whether t=you should start from the beginning or not
     adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client)
     print(f"Obtained adjacency. Number of edges: {len(adjacency_matrix_rows_cols['row_coords'])}")
     

@@ -172,7 +172,7 @@ def _construct_dgl_graph(
     col_coordinates = torch.tensor(col_coordinates).long()
     
     assert len(row_coordinates) == len(col_coordinates)
-    graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.uint32, num_nodes=len(node_ids))
+    graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.long, num_nodes=len(node_ids))
     graph = dgl.to_simple(graph, writeback_mapping=False)
     
     graph.ndata[FEATURES_DATA_NAME] = torch.tensor(features, dtype=torch.float32)
