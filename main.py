@@ -391,7 +391,12 @@ def main():
             print("Mode is `training`, there is no data to load")
         else:
             print("Debug mode is activated, skipping uploading to YT")
-            
+    
+    # removed all cache after Cube run
+    Path("checkpoints/data_dict.pkl").unlink(missing_ok=True)
+    Path("checkpoints/edge_index.npz").unlink(missing_ok=True)
+    Path("checkpoints/load_metadata.json").unlink(missing_ok=True)
+    
     copy_out_to_snapshot("./", dump=True)
 
 if __name__ == "__main__":
