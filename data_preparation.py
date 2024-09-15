@@ -6,6 +6,8 @@ import numpy as np
 import ujson as json
 import pandas as pd
 import yt.wrapper as yt
+import joblib
+
 
 import time
 OptionalColumns = Optional[Sequence[str]]
@@ -94,36 +96,58 @@ def read_features_table(mr_table, client: yt.YtClient, feature_columns_presented
         features_columns=all_features_names,
     )
 
-def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mapping[str, int], client: yt.YtClient) -> Dict[str, np.ndarray]:
+def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mapping[str, int], client: yt.YtClient,
+                                       _loading_metadata_path: str, loading_metadata: Dict[str, bool or int]) -> Dict[str, np.ndarray]:
     
-    yt_iterator = client.read_table(mr_table["table"],                                                                       
+    
+    
+    rows_already_loaded = loading_metadata["edge_index_rows_loaded"]
+    
+
+    # "checkpoints/edges_starts"
+    # "checkpoints/edges_ends"
+
+    
+    yt_iterator = client.read_table(yt.TablePath(mr_table["table"], start_index=rows_already_loaded),                                                                       
                                 format="json", 
-                                unordered=True, 
+                                unordered=False, 
                                 enable_read_parallel=True,
                                 raw=True,
                                 )
     
-    edges_starts = np.array([], dtype=np.int64)
-    edges_ends = np.array([], dtype=np.int64)
-    
     num_rows = get_row_count(mr_table["table"], client)
+
+    if rows_already_loaded > 0:
+        edge_index_processed = np.load("checkpoints/edge_index.npz")
+        
+        edges_starts = edge_index_processed["edges_starts"]
+        edges_ends = edge_index_processed["edges_ends"]
+        
+    else:
+        edges_starts = np.array([], dtype=np.int64)
+        edges_ends = np.array([], dtype=np.int64)
+    
     
     _running_container_for_sources: List[np.int64] = []
     _running_container_for_finishes: List[np.int64] = []
     
     # TODO skip some rows after restart
     
-    for i, row in enumerate(yt_iterator, 1):
+    for i, row in enumerate(yt_iterator, rows_already_loaded+1):
         row = json.loads(row)
         try:
             start = np.int64(node_id_to_index_mapping[row["source"]])
             end = np.int64(node_id_to_index_mapping[row["target"]])
             
+            _running_container_for_sources.append(start)
+            _running_container_for_finishes.append(end)
+
             
             if i % 1_000_000 == 0:
                 print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
                 gc.collect()
                 
+
             
             if i % 20_000_000 == 0: # merge containers
                 
@@ -139,19 +163,19 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                 gc.collect()
                 
                 # TODO save checkpoints
+                np.savez_compressed("checkpoints/edge_index", **dict(edges_starts=edges_starts, edges_ends=edges_ends))
+                loading_metadata["edge_index_rows_loaded"] = i
+                json.dump(loading_metadata, open(_loading_metadata_path, "w"))
+                copy_out_to_snapshot("./", dump=True)    
 
-            else:
-                _running_container_for_sources.append(start)
-                _running_container_for_finishes.append(end)
-            
             
         except KeyError:
             print("Filtered edge with at least one end not presented in features dataframe")
         finally:
             del row
 
-    edges_starts = np.array(edges_starts)
-    edges_ends = np.array(edges_ends)
+    # edges_starts = np.array(edges_starts)
+    # edges_ends = np.array(edges_ends)
     
     return dict(
         row_coords=edges_starts,
@@ -188,30 +212,53 @@ def get_row_count(path: yt.YPath, client: yt.YtClient) -> int:
 
 def main_prepare_mr_tables(
     features_mr_table: Dict[str, str],
-    edges_mr_table: Dict[str, str],    
+    edges_mr_table: Dict[str, str],
+        
+    features_table_loaded: bool,
+    edge_index_rows_loaded: int,
+    _loading_metadata_path: str,
+
     token=None,
     train_metadata: Optional[Dict[str, List[str]]] = None,
 ):
     print(f"{features_mr_table=}\n{edges_mr_table=}")
     
-    client = make_client(features_mr_table["cluster"], max_thread_count=128, token=token)
+    client = make_client(features_mr_table["cluster"], max_thread_count=64, token=token)
 
-    
     PARAMS_OUTPUT = {}
     
     # TODO check whether features are already processed and load them
     feature_columns_presented_in_train_df = None if train_metadata is None else train_metadata["features_columns"]
     
-    data_dict: Dict[str, np.ndarray or Dict[str, np.ndarray]] = read_features_table(mr_table=features_mr_table, feature_columns_presented_in_train=feature_columns_presented_in_train_df, client=client)
     
+    loading_metadata = dict(features_table_loaded=features_table_loaded, edge_index_rows_loaded=edge_index_rows_loaded)
+    
+    if features_table_loaded:
+        print("Loading already saved features array and other data information (stored in dictionary)")
+        data_dict: Dict[str, np.ndarray or Dict[str, np.ndarray]] = joblib.load("./checkpoints/data_dict.pkl")
+        
+    else:
+        data_dict: Dict[str, np.ndarray or Dict[str, np.ndarray]] = read_features_table(mr_table=features_mr_table, feature_columns_presented_in_train=feature_columns_presented_in_train_df, client=client)
+
+        joblib.dump(data_dict, "./checkpoints/data_dict.pkl")
     
     print(f"Read train table, extracted features, train/val/test masks and all service columns from features dataframe ({SERVICE_COLUMNS_IN_FEATURES_TABLE})")
     
     _node_ids_to_index_mapping = dict(zip(data_dict["node_ids"], range(len(data_dict["node_ids"]))))
     print("Calculated node ids matching with their corresponding indices")
+
+    loading_metadata["features_table_loaded"] = True
     
-    # TODO check whether t=you should start from the beginning or not
-    adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client)
+    # save checkpoint after loaded features and other data stuff:
+    json.dump(loading_metadata, open(_loading_metadata_path, "w"))
+    copy_out_to_snapshot("./", dump=True)
+    
+    print("Dumped data information to snapshot")
+    
+    
+    # TODO check whether you should start from the beginning or not
+    adjacency_matrix_rows_cols = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client,
+                                                                    _loading_metadata_path=_loading_metadata_path, loading_metadata=loading_metadata)
     print(f"Obtained adjacency. Number of edges: {len(adjacency_matrix_rows_cols['row_coords'])}")
     
     PARAMS_OUTPUT["features"] = data_dict["features"]

@@ -285,12 +285,34 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
         train_metadata = joblib.load(open(train_metadata_file, "rb"))
     else:
         train_metadata = None
+        
+        
+    # prepare for graceful restart of the download:
+    _loading_metadata_path = "./checkpoints/load_metadata.json"
+    if os.path.exists(_loading_metadata_path):
+        with open(_loading_metadata_path) as handler:
+            loading_metadata = json.load(handler)
+            
+            features_table_loaded = loading_metadata["features_table_loaded"]
+            edge_index_rows_loaded = loading_metadata["edge_index_rows_loaded"]
+            
+            
+            
+    else:
+        features_table_loaded = False
+        edge_index_rows_loaded = 0
+    
+    print(f"Optional graceful restart is available: {features_table_loaded=}, edge_index_rows_loaded={edge_index_rows_loaded/1e6}M")
 
     input_dict = main_prepare_mr_tables(
         features_mr_table=features_mr_table,
         edges_mr_table=edges_mr_table,
         token=YT_TOKEN,
         train_metadata=train_metadata,
+        
+        features_table_loaded=features_table_loaded,
+        edge_index_rows_loaded=edge_index_rows_loaded,
+        _loading_metadata_path=_loading_metadata_path
     )
 
     masks_dict: dict[str, np.ndarray] = input_dict["masks"]
