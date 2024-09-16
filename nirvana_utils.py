@@ -2,6 +2,7 @@
 try:
     import nirvana_dl
     from distutils.dir_util import copy_tree
+    from shutil import rmtree
     import os
 except ImportError:
     nirvana_dl = None
@@ -41,6 +42,9 @@ def copy_out_to_snapshot(out, dump=True):
 
         if os.path.exists(f"{snapshot_path}/state"):
             os.system(f"rm {snapshot_path}/state")
+            rmtree(snapshot_path)
+            os.makedirs(snapshot_path, exist_ok=True)
+            
             
         copy_tree(out, snapshot_path)
 
