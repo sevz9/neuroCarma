@@ -32,10 +32,10 @@ def copy_out_to_snapshot(out, dump=True):
         # Delete previous state to avoid memory explosion
         print("Snapshot contents:")
 
-        os.system(f"ls -laR {snapshot_path}")
+        os.system(f"ls -la {snapshot_path}")
         
         print("Original filesystem out:")
-        os.system(f"ls -laR {out}")
+        os.system(f"ls -la {out}")
 
         os.system(f"rm -rf {snapshot_path}/*")
 
