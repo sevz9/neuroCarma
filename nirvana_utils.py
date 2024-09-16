@@ -33,6 +33,8 @@ def copy_out_to_snapshot(out, dump=True):
         
         if os.path.exists(f"{snapshot_path}/state"):
             os.system(f"rm {snapshot_path}/state")
+        os.system(f"rm -rf {snapshot_path}/*")
+            
         copy_tree(out, snapshot_path)
 
         if dump:
