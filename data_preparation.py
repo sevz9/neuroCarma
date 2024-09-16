@@ -13,6 +13,7 @@ import time
 OptionalColumns = Optional[Sequence[str]]
 
 from nirvana_utils import copy_out_to_snapshot, copy_snapshot_to_out
+from npy_append_array import NpyAppendArray
 
 KEY_COLUMN = "key"
 TARGET_COLUMN = "target"
@@ -101,10 +102,14 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
     
     
     def append_edges_and_make_checkpoint(running_container: List[List[int]], row_number):
-        with open("checkpoints/dataset/edges.csv", "a") as edges_file_handler:
-            df_partial = pd.DataFrame(running_container).astype(np.int64)
-            df_partial.to_csv(edges_file_handler, index=False, header=False)
+        # with open("checkpoints/dataset/edges.csv", "a") as edges_file_handler:
+        #     df_partial = pd.DataFrame(running_container).astype(np.int64)
+        #     df_partial.to_csv(edges_file_handler, index=False, header=False)
         
+        edges_part = np.array(running_container)
+        
+        with NpyAppendArray("checkpoints/dataset/edges.npy") as npaa:
+            npaa.append(edges_part)
         
         loading_metadata["edge_index_rows_loaded"] = row_number
         json.dump(loading_metadata, open(_loading_metadata_path, "w"))
@@ -112,7 +117,7 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
         
         print(f"Saved checkpoint at {row_number}-th row")
         
-        del df_partial
+        del edges_part
     
     rows_already_loaded = loading_metadata["edge_index_rows_loaded"]
     yt_iterator = client.read_table(yt.TablePath(mr_table["table"], start_index=rows_already_loaded),                                                                       
@@ -129,8 +134,8 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
     for i, row in enumerate(yt_iterator, rows_already_loaded+1):
         row = json.loads(row)
         try:
-            start = node_id_to_index_mapping[row["source"]]
-            end = node_id_to_index_mapping[row["target"]]
+            start = np.int64(node_id_to_index_mapping[row["source"]])
+            end = np.int64(node_id_to_index_mapping[row["target"]])
             
             running_container.append([start, end])
             
@@ -140,6 +145,7 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
             
                 if i % 100_000_000 == 0: # merge containers
                     append_edges_and_make_checkpoint(running_container, i)
+                    del running_container
                     running_container = []
                     gc.collect()
 
@@ -197,7 +203,7 @@ def main_prepare_mr_tables(
 ):
     print(f"{features_mr_table=}\n{edges_mr_table=}")
     
-    client = make_client(features_mr_table["cluster"], max_thread_count=64, token=token)
+    client = make_client(features_mr_table["cluster"], max_thread_count=32, token=token)
 
     PARAMS_OUTPUT = {}
     
@@ -233,7 +239,8 @@ def main_prepare_mr_tables(
     # TODO check whether you should start from the beginning or not
     if loading_metadata.get("adjacency_loaded"):
         
-        edges_file = "checkpoints/edges.csv"
+        # edges_file = "checkpoints/dataset/edges.csv"
+        edges_file = "checkpoints/dataset/edges.npy"
     else:
         edges_file = read_edges_table_and_get_adgacency(mr_table=edges_mr_table, node_id_to_index_mapping=_node_ids_to_index_mapping, client=client,
                                                                         _loading_metadata_path=_loading_metadata_path, loading_metadata=loading_metadata)

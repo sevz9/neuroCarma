@@ -357,8 +357,15 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
     # edges_numpy = pd.read_csv(edges_file, dtype=np.int64).values.T
     gc.collect()
     # breakpoint()
-    edges_path_new = edges_file # os.path.join(dataset_base_dir, "edges.npy")
-
+    # edges_path_new = edges_file # os.path.join(dataset_base_dir, "edges.npy")
+    edges_path_new = os.path.join(dataset_base_dir, "edges.npy")
+    edges_transposed = np.load(edges_path_new).T
+    Path(edges_path_new).unlink(missing_ok=True)
+    np.save(edges_path_new, edges_transposed)
+    
+    del edges_transposed
+    gc.collect()
+    
     features_path = os.path.join(dataset_base_dir, "features.npy")
     node_indices_path = os.path.join(dataset_base_dir, "node_ids.npy")
     
@@ -378,6 +385,10 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
     train_labels = targets[train_mask]
     val_labels = targets[val_mask]
     test_labels = targets[test_mask]
+    
+    del targets
+    del node_indices
+    
     
     if len(test_node_indices) == 0:
         test_node_indices = val_node_indices
@@ -407,7 +418,7 @@ graph:
   nodes:
     - num: {features.shape[0]}
   edges:
-    - format: csv
+    - format: numpy
       path: {os.path.basename(edges_path_new)}
 feature_data:
   - domain: node
