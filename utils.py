@@ -22,6 +22,7 @@ from sklearn.preprocessing import StandardScaler
 sys.path.append("./")
 
 from data_preparation import main_prepare_mr_tables
+from nirvana_utils import copy_out_to_snapshot
 
 OUTPUT_MASK_NAME = "output_mask"
 FEATURES_DATA_NAME = "features"
@@ -284,6 +285,21 @@ def create_graphbolt_dataloader(graph, features, train_val_test_set, bath_size, 
 
 
 def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None):
+    
+    def create_dataset_and_return():
+        dataset = gb.OnDiskDataset(dataset_base_dir, auto_cast_to_optimal_dtype=False).load()
+        graph = dataset.graph
+        print(f"Loaded graph: {graph}\n")
+        feature = dataset.feature
+        print(f"Loaded feature store: {feature}\n")
+
+        tasks = dataset.tasks
+        nc_task = tasks[0]
+        print(f"Loaded node classification task: {nc_task}\n")    
+        
+        copy_out_to_snapshot("./")
+        return dataset, num_features, scaler, input_dict["train_metadata"], node_index_to_id_mapper
+
     # save all files in a special directory and thus preprocess graph
     dataset_base_dir = "checkpoints/dataset/"
     os.makedirs(dataset_base_dir, exist_ok=True)
@@ -358,13 +374,17 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
     gc.collect()
     # breakpoint()
     # edges_path_new = edges_file # os.path.join(dataset_base_dir, "edges.npy")
+    metadata_path = os.path.join(dataset_base_dir, "metadata.yaml")
+
+    if os.path.exists(metadata_path):
+        return create_dataset_and_return()
+    
     edges_path_new = os.path.join(dataset_base_dir, "edges.npy")
     edges_transposed = np.load(edges_path_new).T
     Path(edges_path_new).unlink(missing_ok=True)
     np.save(edges_path_new, edges_transposed)
     
     del edges_transposed
-    gc.collect()
     
     features_path = os.path.join(dataset_base_dir, "features.npy")
     node_indices_path = os.path.join(dataset_base_dir, "node_ids.npy")
@@ -456,23 +476,10 @@ tasks:
 """
     print(yaml_content)
 
-    metadata_path = os.path.join(dataset_base_dir, "metadata.yaml")
     with open(metadata_path, "w") as f:
         f.write(yaml_content)
         
-    dataset = gb.OnDiskDataset(dataset_base_dir, auto_cast_to_optimal_dtype=False).load()
-
-    graph = dataset.graph
-    print(f"Loaded graph: {graph}\n")
-    feature = dataset.feature
-    print(f"Loaded feature store: {feature}\n")
-
-    tasks = dataset.tasks
-    nc_task = tasks[0]
-    print(f"Loaded node classification task: {nc_task}\n")    
-    
-    return dataset, num_features, scaler, input_dict["train_metadata"], node_index_to_id_mapper
-
+    return create_dataset_and_return()
 
 def write_output_to_YT(output: list[dict[str, Any]], table_path_root: str = "//home/yr/fvelikon/tmp") -> dict[str, str]:
     @yt.yt_dataclass
