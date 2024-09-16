@@ -141,17 +141,16 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
 
         except KeyError:
             pass
-        finally:
-            del row
-            if i % 10_000_000 == 0:
-                print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
+        del row
+        if i % 10_000_000 == 0:
+            print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
+            gc.collect()
+        
+            if i % 100_000_000 == 0: # merge containers
+                append_edges_and_make_checkpoint(running_container, i)
+                del running_container
+                running_container = []
                 gc.collect()
-            
-                if i % 100_000_000 == 0: # merge containers
-                    append_edges_and_make_checkpoint(running_container, i)
-                    del running_container
-                    running_container = []
-                    gc.collect()
 
     if running_container:
         append_edges_and_make_checkpoint(running_container, i)
