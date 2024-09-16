@@ -30,7 +30,13 @@ def copy_out_to_snapshot(out, dump=True):
         print(f"Copy {out} to the snapshot path: {snapshot_path}")
 
         # Delete previous state to avoid memory explosion
+        print("Snapshot contents:")
+
+        os.system(f"ls -laR {snapshot_path}")
         
+        print("Original filesystem out:")
+        os.system(f"ls -laR {out}")
+
         os.system(f"rm -rf {snapshot_path}/*")
 
         if os.path.exists(f"{snapshot_path}/state"):
