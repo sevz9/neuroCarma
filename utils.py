@@ -379,12 +379,6 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
     if os.path.exists(metadata_path):
         return create_dataset_and_return()
     
-    edges_path_new = os.path.join(dataset_base_dir, "edges.npy")
-    edges_transposed = np.load(edges_path_new).T
-    Path(edges_path_new).unlink(missing_ok=True)
-    np.save(edges_path_new, edges_transposed)
-    
-    del edges_transposed
     
     features_path = os.path.join(dataset_base_dir, "features.npy")
     node_indices_path = os.path.join(dataset_base_dir, "node_ids.npy")
@@ -430,6 +424,13 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
         gc.collect()
         
         print(f"Saved part of raw graph data to {filepath}")
+
+    edges_path_new = os.path.join(dataset_base_dir, "edges.npy")
+    edges_transposed = np.load(edges_path_new).T
+    Path(edges_path_new).unlink(missing_ok=True)
+    np.save(edges_path_new, edges_transposed)
+    
+    del edges_transposed
 
 
     yaml_content = f"""
