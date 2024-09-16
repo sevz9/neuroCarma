@@ -106,10 +106,10 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
         #     df_partial = pd.DataFrame(running_container).astype(np.int64)
         #     df_partial.to_csv(edges_file_handler, index=False, header=False)
         
-        edges_part = np.array(running_container)
-        
-        with NpyAppendArray("checkpoints/dataset/edges.npy") as npaa:
-            npaa.append(edges_part)
+        if len(running_container) > 0:
+            edges_part = np.array(running_container)
+            with NpyAppendArray("checkpoints/dataset/edges.npy") as npaa:
+                npaa.append(edges_part)
         
         loading_metadata["edge_index_rows_loaded"] = row_number
         json.dump(loading_metadata, open(_loading_metadata_path, "w"))
@@ -138,7 +138,11 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
             end = np.int64(node_id_to_index_mapping[row["target"]])
             
             running_container.append([start, end])
-            
+
+        except KeyError:
+            pass
+        finally:
+            del row
             if i % 10_000_000 == 0:
                 print(f"Processed {i / 1_000_000}M/{num_rows / 1_000_000}M rows")
                 gc.collect()
@@ -148,12 +152,6 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
                     del running_container
                     running_container = []
                     gc.collect()
-
-
-        except KeyError:
-            print("Filtered edge with at least one end not presented in features dataframe")
-        finally:
-            del row
 
     if running_container:
         append_edges_and_make_checkpoint(running_container, i)
