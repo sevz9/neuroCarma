@@ -424,7 +424,7 @@ def main():
     Path("checkpoints/data_dict.pkl").unlink(missing_ok=True)
     Path("checkpoints/edge_index.npz").unlink(missing_ok=True)
     Path("checkpoints/load_metadata.json").unlink(missing_ok=True)
-    rmtree("checkpoints/dataset") # shutil.rmtree sometimes dies in endless lopp
+    rmtree("checkpoints/dataset") # shutil.rmtree sometimes dies in endless loop
     copy_out_to_snapshot("./", dump=True)
 
 if __name__ == "__main__":

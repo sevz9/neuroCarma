@@ -31,17 +31,16 @@ def copy_out_to_snapshot(out, dump=True):
         print(f"Copy {out} to the snapshot path: {snapshot_path}")
 
         # Delete previous state to avoid memory explosion
-        # print("Snapshot contents:")
-
-        # os.system(f"ls -la {snapshot_path}")
+        print("====== Snapshot contents: =======")
+        os.system(f"ls -lah {snapshot_path}")
         
-        # print("Original filesystem out:")
-        # os.system(f"ls -la {out}")
+        print("====== Original filesystem out: =======")
+        os.system(f"ls -lah {out}")
 
         # os.system(f"rm -rf {snapshot_path}/*")
 
         if os.path.exists(f"{snapshot_path}/state"):
-            os.system(f"rm {snapshot_path}/state")
+            # os.system(f"rm {snapshot_path}/state")
             rmtree(snapshot_path)
             os.makedirs(snapshot_path, exist_ok=True)
             
