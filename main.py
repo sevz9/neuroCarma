@@ -425,7 +425,7 @@ def main():
     Path("checkpoints/edge_index.npz").unlink(missing_ok=True)
     Path("checkpoints/load_metadata.json").unlink(missing_ok=True)
     rmtree("checkpoints/dataset") # shutil.rmtree sometimes dies in endless loop
-    copy_out_to_snapshot("./", dump=True)
+    copy_out_to_snapshot("./", dump=True, clear_after_train=True)
 
 if __name__ == "__main__":
     main()

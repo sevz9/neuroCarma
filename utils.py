@@ -8,7 +8,7 @@ from typing import Any, List, Optional, Dict, ClassVar
 import gc
 
 import dgl.graphbolt as gb
-
+import glob
 from pydantic import validate_arguments
 from dataclasses import dataclass
 import yaml
@@ -179,7 +179,20 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
 
         tasks = dataset.tasks
         nc_task = tasks[0]
-        print(f"Loaded node classification task: {nc_task}\n")    
+        print(f"Loaded node classification task: {nc_task}\n")
+        
+        # # delete_all_unnecessary files: <--- DGL Can't handle it for now. skipping
+        # for npy_file in glob.glob(f"{dataset_base_dir}/*.npy"):
+        #     os.remove(npy_file)
+        #     print(f"Deleted {npy_file} as its ancestor is stored in preprocessed directory")
+            
+        #     filename = os.path.basename(npy_file)
+        #     if filename == "edges.npy":
+        #         continue
+        #     preprocessed_filepath = os.path.join(dataset_base_dir, "preprocessed", filename)
+        #     os.symlink(src=preprocessed_filepath, dst=npy_file)
+        #     print("Created symlink to the preprocessed file")
+
         
         copy_out_to_snapshot("./")
         return dataset, num_features, scaler, input_dict["train_metadata"], node_index_to_id_mapper
