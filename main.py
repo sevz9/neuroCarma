@@ -152,8 +152,10 @@ class TrainEval:
 
             total_loss += loss.detach()
             tk.set_postfix({"Loss": "%6f" % float(total_loss / t)})
-
-        return total_loss.item() / t
+        try:
+            return total_loss.item() / t
+        except AttributeError:
+            raise AttributeError("total_loss is float because there is not training data in a graph. Specify training examples properly by passing non-zero train masks!")
 
     @torch.no_grad()
     def eval_fn(self, current_epoch):
@@ -170,7 +172,11 @@ class TrainEval:
             total_loss += loss.detach()
             tk.set_postfix({"Loss": "%6f" % float(total_loss / t)})
 
-        return total_loss.item() / t
+        try:
+            return total_loss.item() / t
+        except AttributeError:
+            print("No validation data has been provided, skipping")
+            return 0.0
 
     @torch.no_grad()
     def test(self) -> tuple[dict[int, float], dict[int, float]]:
