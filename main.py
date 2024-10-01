@@ -254,7 +254,7 @@ class TrainEval:
         id2logits_df = pd.DataFrame(
             data={NODE_ID_DATA_NAME: output_node_indices, "score": predictions}, columns=[NODE_ID_DATA_NAME, "score"]
         )
-        metrics = compute_metrics(y_true=(predictions > 0.5).astype(int), y_pred=labels.astype(int))
+        metrics = compute_metrics(y_pred=(predictions > 0.5).astype(int), y_true=labels.astype(int))
         print(f"EPOCH {self.epoch}\tMetrics are: {metrics}")
 
         return id2logits_df
