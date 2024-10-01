@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Mapping, Optional, Callable
-
+import gc
 import dgl
 import joblib
 import numpy as np
@@ -109,7 +109,7 @@ class TrainEval:
         input_features = subgraph.ndata[FEATURES_DATA_NAME]
         all_output_mask = subgraph.ndata[MASK_DATA_NAME]
 
-        breakpoint()
+        # breakpoint()
         all_logits = self.model(subgraph, input_features)
         
         output_nodes_train_mask = all_output_mask[output_nodes_mask]
@@ -127,7 +127,7 @@ class TrainEval:
         #     logits = output_nodes_logits
         #     labels = output_nodes_labels
         #     ids = output_node_indices
-        
+        # breakpoint()
         logits = output_nodes_logits[output_nodes_train_mask]
         labels = output_nodes_labels[output_nodes_train_mask]
         ids = output_node_indices[output_nodes_train_mask]
@@ -377,9 +377,12 @@ def main():
 
     if NODE_ID_DATA_NAME not in graphs[0].ndata:
         for i in range(len(graphs)):
-            graphs[i].ndata[NODE_ID_DATA_NAME] = torch.arange(len(graphs[i].ndata[FEATURES_DATA_NAME]))
+            graphs[i].ndata[NODE_ID_DATA_NAME] = torch.arange(len(graphs[i].ndata[FEATURES_DATA_NAME])).reshape(-1, 1)
         
         print("Node id data isn't provided, assigning for each node its relative index")
+    # for i in range(len(graphs)):
+    #     graphs[i] = dgl.to_simple(graphs[i])
+    #     gc.collect()
 
     if config.remove_self_loops:
         [graph_train, graph_valid, graph_test] = [remove_self_loop(g) for g in graphs]
@@ -388,7 +391,8 @@ def main():
     # AttributeError: 'FusedCSCSamplingGraph' object has no attribute 'to_canonical_etype'
     # if config.remove_self_loops:
     #     graph = remove_self_loop(graph)
-            
+    gc.collect()
+
     num_input_features = graph_train.ndata[FEATURES_DATA_NAME].shape[1]
     
 

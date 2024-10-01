@@ -183,9 +183,75 @@ class GraphConvolutionLayer(nn.Module):
 
         
         return x
-        
+
 
 class GraphNeuralNetwork(nn.Module):
+    def __init__(
+        self, 
+        num_input_features, 
+        num_hidden_features, 
+        normalisation_name,
+        convolution_name,
+        convolution_params,
+        activation_name,
+        apply_skip_connection,
+        num_preprocessing_layers, 
+        num_encoder_layers, 
+        num_predictor_layers,
+        **kwargs,
+        
+    ):
+        super().__init__()
+
+
+        preprocessing_feature_list = [num_input_features] + [num_hidden_features] * num_preprocessing_layers
+        encoder_feature_list = [num_hidden_features] * (num_encoder_layers + 1)
+        
+        
+        predictor_feature_list = [num_hidden_features] * num_predictor_layers + [1]
+        
+        self.apply_skip_connection = apply_skip_connection
+        self.preprocessing = nn.Sequential(*[
+            LinearLayer(
+                preprocessing_feature_list[idx], 
+                preprocessing_feature_list[idx + 1], 
+                normalisation_name, 
+                activation_name, 
+                apply_skip_connection if idx != 0 else False
+            ) for idx in range(len(preprocessing_feature_list) - 1)
+        ])
+        self.encoder = nn.Sequential(*[
+            GraphConvolutionLayer(
+                encoder_feature_list[idx], 
+                encoder_feature_list[idx + 1], 
+                normalisation_name, 
+                convolution_name, 
+                convolution_params, 
+                activation_name, 
+                apply_skip_connection
+            ) for idx in range(len(encoder_feature_list) - 1)
+        ])
+        self.predictor = nn.Sequential(*[
+            LinearLayer(
+                predictor_feature_list[idx], 
+                predictor_feature_list[idx + 1], 
+                normalisation_name, 
+                activation_name if idx + 1 != len(predictor_feature_list) - 1 else 'none', 
+                apply_skip_connection if idx + 1 != len(predictor_feature_list) - 1 else False
+            ) for idx in range(len(predictor_feature_list) - 1)
+        ])
+
+    def forward(self, graph, features, *args, **kwargs):
+        out = self.preprocessing(features)
+        for convolution in self.encoder:
+            out = convolution(graph, out)
+            
+        out = self.predictor(out)
+        return out
+
+
+
+class GraphNeuralNetworkGraphBolt(nn.Module):
     def __init__(
         self, 
         num_input_features, 
@@ -251,7 +317,7 @@ class GraphNeuralNetwork(nn.Module):
 
 
 
-class GNNWithPLREmbeddings(nn.Module):
+class GNNWithPLREmbeddingsGraphBolt(nn.Module):
     
     def __init__(
         self, 
@@ -345,6 +411,101 @@ class GNNWithPLREmbeddings(nn.Module):
         
         return out
 
+
+class GNNWithPLREmbeddings(nn.Module):
+    
+    def __init__(
+        self, 
+        num_input_features, 
+        num_hidden_features, 
+        normalisation_name,
+        convolution_name,
+        convolution_params,
+        activation_name,
+        apply_skip_connection,
+        num_preprocessing_layers, 
+        num_encoder_layers, 
+        num_predictor_layers,
+        
+        n_frequencies: int=48,
+        frequency_scale: float=0.01,
+        d_embedding: int=16,
+        lite: bool=True,
+        
+        
+    ):
+        super().__init__()
+        
+        self.apply_skip_connection = apply_skip_connection
+        
+        
+        self.features_encoder = PLREmbeddings(
+            n_features=num_input_features,
+            n_frequencies=n_frequencies,
+            frequency_scale=frequency_scale,
+            d_embedding=d_embedding,
+            lite=lite
+        )
+        
+        self.projection = nn.Linear(
+                            num_input_features * d_embedding, 
+                            num_hidden_features,
+                        )
+        
+        
+        preprocessing_feature_list = [num_hidden_features] * num_preprocessing_layers
+        encoder_feature_list = [num_hidden_features] * (num_encoder_layers + 1)
+        predictor_feature_list = [num_hidden_features] * num_predictor_layers + [1]
+        
+        
+        self.preprocessing = nn.Sequential(*[
+            LinearLayer(
+                preprocessing_feature_list[idx], 
+                preprocessing_feature_list[idx + 1], 
+                normalisation_name, 
+                activation_name, 
+                apply_skip_connection if idx != 0 else False
+            ) for idx in range(len(preprocessing_feature_list) - 1)
+        ])
+        
+        
+        self.encoder = nn.Sequential(*[
+            GraphConvolutionLayer(
+                encoder_feature_list[idx], 
+                encoder_feature_list[idx + 1], 
+                normalisation_name, 
+                convolution_name, 
+                convolution_params, 
+                activation_name, 
+                apply_skip_connection=apply_skip_connection
+            ) for idx in range(len(encoder_feature_list) - 1)
+        ])
+        
+        
+        self.predictor = nn.Sequential(*[
+            LinearLayer(
+                predictor_feature_list[idx], 
+                predictor_feature_list[idx + 1], 
+                normalisation_name, 
+                activation_name if idx + 1 != len(predictor_feature_list) - 1 else 'none', 
+                apply_skip_connection if idx + 1 != len(predictor_feature_list) - 1 else False
+            ) for idx in range(len(predictor_feature_list) - 1)
+        ])
+
+    def forward(self, graph, features, *args, **kwargs):
+        
+        features_transformed = self.features_encoder(features).view(features.shape[0], -1)
+        features_transformed = F.relu(self.projection(features_transformed))
+        
+        out = self.preprocessing(features_transformed)
+        
+        for convolution in self.encoder:
+            out = convolution(graph, out)
+
+        out = self.predictor(out)
+        
+        return out
+    
 model_name_to_class = {
     'GNN': GraphNeuralNetwork,
     'none': None,
