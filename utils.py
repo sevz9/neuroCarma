@@ -337,8 +337,6 @@ def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None
         features=features,
         scaler_state_file=scaler_state_filename,
     )
-    num_features = features.shape[1]
-
 
     graph_train, graph_val, graph_test = [_construct_dgl_graph(edges=edges, features=features, targets=targets, mask=mask) for mask in [train_mask, val_mask, test_mask]]
 

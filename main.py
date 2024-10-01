@@ -96,7 +96,7 @@ class TrainEval:
         self.early_stopping_steps = early_stopping_steps
 
         self.node_data_names = [FEATURES_DATA_NAME, MASK_DATA_NAME, LABELS_DATA_NAME, NODE_ID_DATA_NAME]
-
+        # breakpoint()
         self.mode = mode
 
         if state_dict_file is not None:
@@ -212,7 +212,7 @@ class TrainEval:
         y_true = list_of_tensors_to_numpy_flat(labels).astype(int)
         
         metrics = compute_metrics(y_true=y_true, y_pred=y_pred)
-        print(f"EPOCH {self.epoch}\tMetrics are: {metrics}")
+        print(f"EPOCH {current_epoch}\tMetrics are: {metrics}")
 
 
         try:
@@ -230,7 +230,7 @@ class TrainEval:
         output_node_indices: list[torch.Tensor] = []  # type: ignore
 
         tk = tqdm(self.test_dataloader, desc="TEST")
-
+        print(f"number of batches:{len(tk)}")
         total_loss = 0.0
 
         for t, data in enumerate(tk, 1):
@@ -256,12 +256,11 @@ class TrainEval:
         predictions: np.ndarray = list_of_tensors_to_numpy_flat(predictions_raw, apply_func=torch.sigmoid)
         labels: np.ndarray = list_of_tensors_to_numpy_flat(labels)
         output_node_indices: np.ndarray = list_of_tensors_to_numpy_flat(output_node_indices)
-
         id2logits_df = pd.DataFrame(
             data={NODE_ID_DATA_NAME: output_node_indices, "score": predictions}, columns=[NODE_ID_DATA_NAME, "score"]
         )
         metrics = compute_metrics(y_pred=(predictions > 0.5).astype(int), y_true=labels.astype(int))
-        print(f"EPOCH {self.epoch}\tMetrics are: {metrics}")
+        print(f"TEST\tMetrics are: {metrics}")
 
         return id2logits_df
 
@@ -298,16 +297,11 @@ class TrainEval:
         torch.save(self.model.state_dict(), "checkpoints/last-weights.pt")
         print("Saved Last Weights")
         copy_out_to_snapshot("./")
-        if self.test_dataloader is not None:
-            print("Performing test on test dataloader")
+        print("Performing test on test dataloader")
 
-            id2logits = self.test()
+        id2logits = self.test()
 
-            return id2logits
-
-
-        return {}
-
+        return id2logits
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Graph Neural Network for fraud prediction")
@@ -451,6 +445,8 @@ def main():
     test_loader = init_dataloader(
         graph_test, sampler, DEVICE, shuffle=False, batch_size=batch_size, num_workers=num_workers
     )
+    
+    # breakpoint()
     # breakpoint()
     trainer = TrainEval(
         model=model,
