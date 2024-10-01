@@ -114,7 +114,7 @@ class LinearLayer(nn.Module):
         )
     
 
-class GraphConvolutionLayer(nn.Module):
+class GraphConvolutionLayerGrapbBolt(nn.Module):
     def __init__(
         self, 
         in_features, 
@@ -149,6 +149,38 @@ class GraphConvolutionLayer(nn.Module):
         x = self.activation(out)
         # except RuntimeError:
         #     breakpoint()
+        
+        return x
+
+class GraphConvolutionLayer(nn.Module):
+    def __init__(
+        self, 
+        in_features, 
+        out_features, 
+        normalisation_name, 
+        convolution_name, 
+        convolution_params, 
+        activation_name, 
+        apply_skip_connection=False,
+    ):
+        super().__init__()
+        self.convolution = convolution_name_to_class[convolution_name](in_features, out_features, **convolution_params)
+        self.normalisation = normalisation_name_to_class[normalisation_name](in_features)
+        self.activation = activation_name_to_class[activation_name]()
+        self.apply_skip_connection = apply_skip_connection
+
+    def forward(self, graph, features):
+        
+        out = self.normalisation(features)
+        conv = self.convolution(graph, out)
+        
+        if self.apply_skip_connection:
+            out = conv + out
+        else:
+            out  = conv
+        
+        x = self.activation(out)
+
         
         return x
         

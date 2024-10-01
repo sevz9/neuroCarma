@@ -158,7 +158,7 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
     
     print(f"Saved graph structure. Obtained edges: {rows_already_loaded+1}")
         
-    return "checkpoints/dataset/edges.csv"
+    return "checkpoints/dataset/edges.npy"
 
 def make_client(yt_proxy: str = "hahn", max_thread_count: int = 4, enable: bool = True, token=None) -> yt.YtClient:
     from datetime import timedelta

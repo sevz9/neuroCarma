@@ -34,6 +34,8 @@ TEST_MASK_DATA_NAME = "test_mask"
 LABELS_DATA_NAME = "target"
 NODE_ID_DATA_NAME = "key"
 
+MASK_DATA_NAME = "mask"
+
 
 YT_TOKEN = os.environ.get("YT_TOKEN")
 
@@ -41,7 +43,7 @@ YT_TOKEN = os.environ.get("YT_TOKEN")
 @dataclass
 class Config:
     # Data options
-    # remove_self_loops: bool = False
+    remove_self_loops: bool = True
     table_output_root_path: str = "//tmp/"
     model_type: str = "GNN"
 
@@ -168,7 +170,185 @@ def create_graphbolt_dataloader(graph, features, train_val_test_set, bath_size, 
     return dataloader
 
 
+def _construct_dgl_graph(
+    edges: np.ndarray, features: np.ndarray, targets: np.ndarray, mask: np.ndarray
+):
+    row_coordinates, col_coordinates = edges[0, :], edges[1, :]
+
+    row_coordinates = torch.tensor(row_coordinates).long()
+    col_coordinates = torch.tensor(col_coordinates).long()
+    graph = dgl.graph(data=(row_coordinates, col_coordinates), idtype=torch.int32, num_nodes=features.shape[0])
+    graph.ndata[FEATURES_DATA_NAME] = torch.tensor(features, dtype=torch.float32)
+    graph.ndata[LABELS_DATA_NAME] = torch.tensor(targets, dtype=torch.float32).reshape(-1, 1)
+    graph.ndata[MASK_DATA_NAME] = torch.tensor(mask, dtype=torch.bool).reshape(-1, 1)
+# NODE_ID_DATA_NAME
+#     graph.ndata[MASK_DATA_NAME] = torch.tensor(mask, dtype=torch.bool).reshape(-1, 1)
+
+    return graph
+
+
+def get_features_and_labels_from_a_graph(graph: dgl.DGLGraph):
+    mask = graph.ndata[MASK_DATA_NAME].bool()
+    features = graph.ndata[FEATURES_DATA_NAME][mask].numpy()
+    labels = graph.ndata[LABELS_DATA_NAME][mask].numpy()
+
+    return features, labels
+
+
+def standard_graph_collate(graph_container):
+    graph = graph_container[0]
+
+    features = graph.ndata["features"]
+    labels = graph.ndata["labels"]
+    mask = graph.ndata["mask"]
+
+    return graph, features, labels, mask
+
+
+def init_dataloader(
+    graph: dgl.DGLGraph,
+    sampler: dgl.dataloading.Sampler,
+    device: str = "cpu",
+    shuffle: bool = True,
+    batch_size: int = 10_000,
+    num_workers: int = 12,
+):
+    dataloader = dgl.dataloading.DataLoader(
+        graph=graph,
+        indices=torch.arange(graph.num_nodes(), dtype=torch.int32),
+        device=device,
+        graph_sampler=sampler,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        batch_size=batch_size,
+        drop_last=False,
+        use_prefetch_thread=True,
+        pin_prefetcher=True,
+    )
+
+    return dataloader
+
+
+def construct_subgraph_from_blocks(
+    blocks: list[Any],
+    batch_size: int,
+    node_attributes_to_copy: list[str],
+    device: str,
+) -> dgl.DGLGraph:
+    """
+    Constructs a copy of a Message flow graphs (MFG), defined as a list of MFGs.
+
+    NOTE: this function is an example of constructing graph for node classification tasks, graph obly contains node features
+
+
+    params:
+
+    `blocks`: list of consecutive message flow graphs, len(blocks) == number of layers in graph convolution
+    `batch_size`: number of destination nodes
+    `node_attributes_to_copy`: list of names of node attributes to copy to a new graph
+    """
+
+    merged_block = deepcopy(dgl.merge([dgl.block_to_graph(b) for b in blocks]))
+    # merged_block = dgl.merge([dgl.block_to_graph(b) for b in blocks])
+
+    row_coords, col_coords = merged_block.edges()
+
+    number_of_nodes = merged_block.srcdata[FEATURES_DATA_NAME].shape[0]
+    
+    new_graph = dgl.graph(data=(row_coords, col_coords), num_nodes=number_of_nodes)
+    
+
+    for node_data_name in node_attributes_to_copy:
+
+        try:
+            new_graph.ndata[node_data_name] = merged_block.srcdata[node_data_name]
+        except dgl._ffi.base.DGLError as e:
+            print(f"{node_data_name=} {merged_block.srcdata[node_data_name].shape=} {new_graph.num_nodes()=} {merged_block.num_nodes()=}")
+            raise e
+
+    # create mask marking only destination nodes, which are needed for
+    num_of_nodes = new_graph.num_nodes()
+    output_mask = torch.zeros(num_of_nodes).bool()
+    output_mask[:batch_size] = True
+    new_graph.ndata[OUTPUT_MASK_NAME] = output_mask.to(device)
+
+    del merged_block
+
+    return new_graph.to(device)
+
+
 def prepare_json_input(data_dir: Path, train_metadata_file: Optional[str] = None):
+
+    dataset_base_dir = "checkpoints/dataset/"
+    os.makedirs(dataset_base_dir, exist_ok=True)
+
+    scaler_state_filename: Path = data_dir / "scaler.bin"
+    json_input_filename: Path = data_dir / "JSON_INPUT.json"
+
+    with open(json_input_filename) as handler:
+        input_json = json.load(handler)
+        features_mr_table = input_json["features_mr_table"]
+        edges_mr_table = input_json["edges_mr_table"]
+
+    if train_metadata_file is not None:
+        train_metadata = joblib.load(open(train_metadata_file, "rb"))
+    else:
+        train_metadata = None
+        
+        
+    # prepare for graceful restart of the download:
+    _loading_metadata_path = "./checkpoints/load_metadata.json"
+    if os.path.exists(_loading_metadata_path):
+        with open(_loading_metadata_path) as handler:
+            loading_metadata = json.load(handler)
+            
+            features_table_loaded = loading_metadata["features_table_loaded"]
+            edge_index_rows_loaded = loading_metadata["edge_index_rows_loaded"]            
+    else:
+        features_table_loaded = False
+        edge_index_rows_loaded = 0
+    
+    print(f"Optional graceful restart is available: {features_table_loaded=}, edge_index_rows_loaded={edge_index_rows_loaded/1e6}M")
+    
+    input_dict = main_prepare_mr_tables(
+        features_mr_table=features_mr_table,
+        edges_mr_table=edges_mr_table,
+        token=YT_TOKEN,
+        train_metadata=train_metadata,
+        
+        features_table_loaded=features_table_loaded,
+        edge_index_rows_loaded=edge_index_rows_loaded,
+        _loading_metadata_path=_loading_metadata_path
+    )
+
+    masks_dict: dict[str, np.ndarray] = input_dict["masks"]
+
+    edges = np.load(input_dict["edges_file"])
+
+
+    targets = input_dict["targets"]
+    
+    test_mask = masks_dict["test_mask"].astype(bool)
+    train_mask = masks_dict["train_mask"].astype(bool)
+    val_mask = masks_dict["val_mask"].astype(bool)
+
+    features = input_dict[FEATURES_DATA_NAME].astype(np.float32)
+    features, scaler = _scale_features(
+        features=features,
+        scaler_state_file=scaler_state_filename,
+    )
+    num_features = features.shape[1]
+
+
+    graph_train, graph_val, graph_test = [_construct_dgl_graph(edges=edges, features=features, targets=targets, mask=mask) for mask in [train_mask, val_mask, test_mask]]
+
+    return [graph_train, graph_val, graph_test], scaler, input_dict["train_metadata"], input_dict["node_index_to_id_mapper"]
+
+
+
+
+
+def prepare_json_input_graphbolt(data_dir: Path, train_metadata_file: Optional[str] = None):
     
     def create_dataset_and_return():
         dataset = gb.OnDiskDataset(dataset_base_dir, auto_cast_to_optimal_dtype=False).load()

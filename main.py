@@ -24,12 +24,15 @@ from utils import (
     TRAIN_MASK_DATA_NAME,
     VAL_MASK_DATA_NAME,
     TEST_MASK_DATA_NAME,
+    MASK_DATA_NAME,
     OUTPUT_MASK_NAME,
     NODE_ID_DATA_NAME,
     create_graphbolt_dataloader,
+    init_dataloader,
     write_output_to_YT,
     get_config,
-    prepare_json_input
+    prepare_json_input,
+    construct_subgraph_from_blocks
 )
 
 from models.gnn_initial_and_plre import create_graph_model
@@ -92,7 +95,7 @@ class TrainEval:
         self.val_every_steps = val_every_steps
         self.early_stopping_steps = early_stopping_steps
 
-        self.node_data_names = [FEATURES_DATA_NAME, TRAIN_MASK_DATA_NAME, VAL_MASK_DATA_NAME, TEST_MASK_DATA_NAME, LABELS_DATA_NAME, NODE_ID_DATA_NAME]
+        self.node_data_names = [FEATURES_DATA_NAME, MASK_DATA_NAME, LABELS_DATA_NAME, NODE_ID_DATA_NAME]
 
         self.mode = mode
 
@@ -101,63 +104,64 @@ class TrainEval:
             self.model.load_state_dict(state_dict)
             print("State dict is loaded")
 
-    # def get_logits_and_labels_for_output_nodes(self, subgraph: dgl.DGLGraph, mask_data_name: torch.Tensor):
-    #     output_nodes_mask = subgraph.ndata[OUTPUT_MASK_NAME]
-    #     input_features = subgraph.ndata[FEATURES_DATA_NAME]
-    #     all_output_mask = subgraph.ndata[mask_data_name]
+    def get_logits_and_labels_for_output_nodes(self, subgraph: dgl.DGLGraph):
+        output_nodes_mask = subgraph.ndata[OUTPUT_MASK_NAME]
+        input_features = subgraph.ndata[FEATURES_DATA_NAME]
+        all_output_mask = subgraph.ndata[MASK_DATA_NAME]
 
-    #     all_logits = self.model(subgraph, input_features)
+        breakpoint()
+        all_logits = self.model(subgraph, input_features)
         
-    #     output_nodes_train_mask = all_output_mask[output_nodes_mask]
+        output_nodes_train_mask = all_output_mask[output_nodes_mask]
         
-    #     output_nodes_logits = all_logits[output_nodes_mask]
-    #     output_nodes_labels = subgraph.ndata[LABELS_DATA_NAME][output_nodes_mask]
-    #     output_node_indices = subgraph.ndata[NODE_ID_DATA_NAME][output_nodes_mask]
+        output_nodes_logits = all_logits[output_nodes_mask]
+        output_nodes_labels = subgraph.ndata[LABELS_DATA_NAME][output_nodes_mask]
+        output_node_indices = subgraph.ndata[NODE_ID_DATA_NAME][output_nodes_mask]
 
-    #     # if apply_train_val_mask:
-    #     #     logits = output_nodes_logits[output_nodes_train_mask]
-    #     #     labels = output_nodes_labels[output_nodes_train_mask]
-    #     #     ids = output_node_indices[output_nodes_train_mask]
+        # if apply_train_val_mask:
+        #     logits = output_nodes_logits[output_nodes_train_mask]
+        #     labels = output_nodes_labels[output_nodes_train_mask]
+        #     ids = output_node_indices[output_nodes_train_mask]
 
-    #     # else:
-    #     #     logits = output_nodes_logits
-    #     #     labels = output_nodes_labels
-    #     #     ids = output_node_indices
+        # else:
+        #     logits = output_nodes_logits
+        #     labels = output_nodes_labels
+        #     ids = output_node_indices
         
-    #     logits = output_nodes_logits[output_nodes_train_mask]
-    #     labels = output_nodes_labels[output_nodes_train_mask]
-    #     ids = output_node_indices[output_nodes_train_mask]
+        logits = output_nodes_logits[output_nodes_train_mask]
+        labels = output_nodes_labels[output_nodes_train_mask]
+        ids = output_node_indices[output_nodes_train_mask]
 
-    #     return dict(
-    #         output_nodes_train_val_mask=output_nodes_train_mask,
-    #         logits=logits,
-    #         labels=labels,
-    #         ids=ids,
-    #     )
-
-    # def get_subgraph_from_data(self, data) -> dgl.DGLGraph:
-    #     _, _, layers_subgraphs = data
-
-    #     subgraph: dgl.DGLGraph = construct_subgraph_from_blocks(
-    #         blocks=layers_subgraphs,
-    #         node_attributes_to_copy=self.node_data_names,
-    #         batch_size=self.batch_size,
-    #         device=self.device,
-    #     )
-
-    #     return subgraph
-    
-    def predict_function(self, data):
-        x = data.node_features["features"]
-        ids = data.blocks[-1].dstnodes()
-        labels = data.labels
-        logits = self.model(data.blocks, x)
-        
         return dict(
-            node_indices=ids,
-            labels=labels.view(-1),
-            logits=logits.view(-1)
+            output_nodes_train_val_mask=output_nodes_train_mask,
+            logits=logits,
+            labels=labels,
+            ids=ids,
         )
+
+    def get_subgraph_from_data(self, data) -> dgl.DGLGraph:
+        _, _, layers_subgraphs = data
+
+        subgraph: dgl.DGLGraph = construct_subgraph_from_blocks(
+            blocks=layers_subgraphs,
+            node_attributes_to_copy=self.node_data_names,
+            batch_size=self.batch_size,
+            device=self.device,
+        )
+
+        return subgraph
+    
+    # def predict_function(self, data):
+    #     x = data.node_features["features"]
+    #     ids = data.blocks[-1].dstnodes()
+    #     labels = data.labels
+    #     logits = self.model(data.blocks, x)
+        
+    #     return dict(
+    #         node_indices=ids,
+    #         labels=labels.view(-1),
+    #         logits=logits.view(-1)
+    #     )
 
     def train_fn(self, current_epoch):
         self.model.train()
@@ -165,10 +169,12 @@ class TrainEval:
         tk = tqdm(self.train_dataloader, desc="EPOCH" + "[TRAIN]" + str(current_epoch) + "/" + str(self.epoch))
 
         for t, data in enumerate(tk, 1):
-            # subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
+            subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
             
             self.optimizer.zero_grad()
-            return_dict = self.predict_function(data)
+            # return_dict = self.predict_function(data)
+            
+            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph)
             loss = self.criterion(return_dict["logits"], return_dict["labels"])
 
             loss.backward()
@@ -191,9 +197,9 @@ class TrainEval:
         labels: list[torch.Tensor] = []  # type: ignore
 
         for t, data in enumerate(tk, 1):
-            # subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
-            return_dict = self.predict_function(data)
-            # return_dict = self.get_logits_and_labels_for_output_nodes(subgraph, mask_data_name=VAL_MASK_DATA_NAME)
+            subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
+            # return_dict = self.predict_function(data)
+            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph)
             loss = self.criterion(return_dict["logits"], return_dict["labels"])
 
             total_loss += loss.detach()
@@ -228,14 +234,14 @@ class TrainEval:
         total_loss = 0.0
 
         for t, data in enumerate(tk, 1):
-            # subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
+            subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
 
-            # return_dict = self.get_logits_and_labels_for_output_nodes(subgraph, mask_data_name=TEST_MASK_DATA_NAME)
+            return_dict = self.get_logits_and_labels_for_output_nodes(subgraph)
             
-            return_dict = self.predict_function(data)
+            # return_dict = self.predict_function(data)
             logits = return_dict["logits"]
             true_labels = return_dict["labels"]
-            output_batch_ids = return_dict["node_indices"]
+            output_batch_ids = return_dict["ids"]
 
             loss = self.criterion(logits, true_labels)
 
@@ -362,18 +368,30 @@ def main():
     table_output_root_path: str = config.table_output_root_path
 
 
-    dataset, num_input_features, scaler, train_metadata, node_index_to_id_mapper = prepare_json_input(data_dir=datadir, train_metadata_file=train_metadata_file,)
-    
+    # dataset, num_input_features, scaler, train_metadata, node_index_to_id_mapper = prepare_json_input(data_dir=datadir, train_metadata_file=train_metadata_file,)
+    graphs, scaler, train_metadata, node_index_to_id_mapper = prepare_json_input(data_dir=datadir, train_metadata_file=train_metadata_file)
     joblib.dump(scaler, "checkpoints/scaler.bin")
     with open("checkpoints/train_metadata", "wb") as write_handler:
         joblib.dump(train_metadata, write_handler)
     print("Successfully created graphs and dumped metadata")
-        
 
+    if NODE_ID_DATA_NAME not in graphs[0].ndata:
+        for i in range(len(graphs)):
+            graphs[i].ndata[NODE_ID_DATA_NAME] = torch.arange(len(graphs[i].ndata[FEATURES_DATA_NAME]))
+        
+        print("Node id data isn't provided, assigning for each node its relative index")
+
+    if config.remove_self_loops:
+        [graph_train, graph_valid, graph_test] = [remove_self_loop(g) for g in graphs]
+    else:
+        graph_train, graph_valid, graph_test = graphs
     # AttributeError: 'FusedCSCSamplingGraph' object has no attribute 'to_canonical_etype'
     # if config.remove_self_loops:
     #     graph = remove_self_loop(graph)
             
+    num_input_features = graph_train.ndata[FEATURES_DATA_NAME].shape[1]
+    
+
 
     MODEL_PARAMS.update(dict(num_input_features=num_input_features))
     model = create_graph_model(model_name=config.model_type, model_params=MODEL_PARAMS).to(DEVICE)
@@ -385,37 +403,51 @@ def main():
         weight_decay=TRAINING_PARAMETERS["weight_decay"],
     )
 
-    graph = dataset.graph
-    feature = dataset.feature
-    train_set = dataset.tasks[0].train_set
-    valid_set = dataset.tasks[0].validation_set
-    test_set = dataset.tasks[0].test_set
-    task_name = dataset.tasks[0].metadata["name"]
-    num_classes = dataset.tasks[0].metadata["num_classes"]
+    # graph = dataset.graph
+    # feature = dataset.feature
+    # train_set = dataset.tasks[0].train_set
+    # valid_set = dataset.tasks[0].validation_set
+    # test_set = dataset.tasks[0].test_set
+    # task_name = dataset.tasks[0].metadata["name"]
+    # num_classes = dataset.tasks[0].metadata["num_classes"]
 
-    print(f"Task: {task_name}. Number of classes: {num_classes}")
+    # print(f"Task: {task_name}. Number of classes: {num_classes}")
+
+    # batch_size = TRAINING_PARAMETERS["batch_size"]
+    # num_workers = TRAINING_PARAMETERS["num_workers"]
+    
+    # fanouts_list = [config.max_num_neighbors for _ in range(config.num_encoder_layers)]
+    # # node_feature_keys = ["features", "node_indices"]
+    # node_feature_keys = ["features"]
+    
+    # common_dataloader_arguments = dict(
+    #     graph=graph, 
+    #     features=feature, 
+    #     bath_size=batch_size,
+    #     fanouts_list=fanouts_list,
+    #     device=DEVICE,
+    #     num_workers=num_workers,
+    #     node_feature_keys=node_feature_keys
+    # )
+    # train_loader = create_graphbolt_dataloader(train_val_test_set=train_set, shuffle=True, **common_dataloader_arguments)
+    # val_loader = create_graphbolt_dataloader(train_val_test_set=valid_set, shuffle=False, **common_dataloader_arguments)
+    # test_loader = create_graphbolt_dataloader(train_val_test_set=test_set, shuffle=False, **common_dataloader_arguments)
+
+    sampler = dgl.dataloading.NeighborSampler(
+        fanouts=[TRAINING_PARAMETERS["max_num_neighbors"]] * MODEL_PARAMS["num_encoder_layers"]
+    )
 
     batch_size = TRAINING_PARAMETERS["batch_size"]
     num_workers = TRAINING_PARAMETERS["num_workers"]
-    
-    fanouts_list = [config.max_num_neighbors for _ in range(config.num_encoder_layers)]
-    # node_feature_keys = ["features", "node_indices"]
-    node_feature_keys = ["features"]
-    
-    common_dataloader_arguments = dict(
-        graph=graph, 
-        features=feature, 
-        bath_size=batch_size,
-        fanouts_list=fanouts_list,
-        device=DEVICE,
-        num_workers=num_workers,
-        node_feature_keys=node_feature_keys
+
+    train_loader = init_dataloader(graph_train, sampler, DEVICE, batch_size=batch_size, num_workers=num_workers)
+    val_loader = init_dataloader(
+        graph_valid, sampler, DEVICE, shuffle=False, batch_size=batch_size, num_workers=num_workers
     )
-    train_loader = create_graphbolt_dataloader(train_val_test_set=train_set, shuffle=True, **common_dataloader_arguments)
-    val_loader = create_graphbolt_dataloader(train_val_test_set=valid_set, shuffle=False, **common_dataloader_arguments)
-    test_loader = create_graphbolt_dataloader(train_val_test_set=test_set, shuffle=False, **common_dataloader_arguments)
-
-
+    test_loader = init_dataloader(
+        graph_test, sampler, DEVICE, shuffle=False, batch_size=batch_size, num_workers=num_workers
+    )
+    # breakpoint()
     trainer = TrainEval(
         model=model,
         train_dataloader=train_loader,
