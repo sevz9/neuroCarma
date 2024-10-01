@@ -13,6 +13,8 @@ import json
 import pandas as pd
 import os
 from shutil import rmtree
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+
 ##################### Nirvana ##########################################
 from nirvana_utils import copy_out_to_snapshot, copy_snapshot_to_out  ###
 from utils import (
@@ -38,6 +40,28 @@ from models.gnn_initial_and_plre import create_graph_model
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 sys.path.append("./")
+
+def compute_metrics(y_true, y_pred):
+    recall = recall_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
+    accuracy = accuracy_score(y_true, y_pred)
+
+    metrics = dict(
+        recall=recall,
+        precision=precision,
+        f1=f1,
+        accuracy=accuracy,
+    )
+    return metrics
+
+def list_of_tensors_to_numpy_flat(array, apply_func: Optional[Callable[[torch.Tensor], torch.Tensor]]=None):
+    plain_array = torch.cat(array, dim=0).cpu().reshape(-1)
+    
+    if apply_func is not None:
+        plain_array = apply_func(plain_array)
+    return plain_array.numpy()
+
 
 class TrainEval:
     def __init__(
@@ -163,6 +187,9 @@ class TrainEval:
         total_loss = 0.0
         tk = tqdm(self.val_dataloader, desc="EPOCH" + "[VALID]" + str(current_epoch) + "/" + str(self.epoch))
 
+        predictions_raw: list[torch.Tensor] = []  # type: ignore
+        labels: list[torch.Tensor] = []  # type: ignore
+
         for t, data in enumerate(tk, 1):
             # subgraph: dgl.DGLGraph = self.get_subgraph_from_data(data)
             return_dict = self.predict_function(data)
@@ -171,6 +198,16 @@ class TrainEval:
 
             total_loss += loss.detach()
             tk.set_postfix({"Loss": "%6f" % float(total_loss / t)})
+            
+            labels.append(return_dict["labels"].detach().cpu())            
+            predictions_raw.append(return_dict["logits"].detach().cpu())
+        
+        y_pred = (list_of_tensors_to_numpy_flat(predictions_raw, apply_func=torch.sigmoid) > 0.5).astype(int)
+        y_true = list_of_tensors_to_numpy_flat(labels).astype(int)
+        
+        metrics = compute_metrics(y_true=y_true, y_pred=y_pred)
+        print(f"EPOCH {self.epoch}\tMetrics are: {metrics}")
+
 
         try:
             return total_loss.item() / t
@@ -181,13 +218,6 @@ class TrainEval:
     @torch.no_grad()
     def test(self) -> tuple[dict[int, float], dict[int, float]]:
         self.model.eval()
-
-        def list_of_tensors_to_numpy_flat(array, apply_func: Optional[Callable[[torch.Tensor], torch.Tensor]]=None):
-            plain_array = torch.cat(array, dim=0).cpu().reshape(-1)
-            
-            if apply_func is not None:
-                plain_array = apply_func(plain_array)
-            return plain_array.numpy()
 
         predictions_raw: list[torch.Tensor] = []  # type: ignore
         labels: list[torch.Tensor] = []  # type: ignore
@@ -224,6 +254,8 @@ class TrainEval:
         id2logits_df = pd.DataFrame(
             data={NODE_ID_DATA_NAME: output_node_indices, "score": predictions}, columns=[NODE_ID_DATA_NAME, "score"]
         )
+        metrics = compute_metrics(y_true=(predictions > 0.5).astype(int), y_pred=labels.astype(int))
+        print(f"EPOCH {self.epoch}\tMetrics are: {metrics}")
 
         return id2logits_df
 
