@@ -138,7 +138,7 @@ def read_edges_table_and_get_adgacency(mr_table, node_id_to_index_mapping: Mappi
             end = np.int64(node_id_to_index_mapping[row["target"]])
             
             running_container.append([start, end])
-            running_container.append([end, start])  # NOTE Edges are considered undirected durin loading
+            # running_container.append([end, start])  # NOTE Edges are considered undirected durin loading NOTE #2 - reversed this change for more flexibility
 
         except KeyError:
             pass
