@@ -19,7 +19,8 @@ activation_name_to_class = {
 }
 
 convolution_name_to_class = {
-    'sage': dglnn.SAGEConv
+    'sage': dglnn.SAGEConv,
+    'gat': dglnn.GATConv
 }
 
 class PeriodicEmbeddings(nn.Module):
@@ -210,6 +211,71 @@ class GraphNeuralNetwork(nn.Module):
         out = self.predictor(out)
         return out
 
+class GraphNeuralNetworkGAT(nn.Module):
+    def __init__(
+        self, 
+        num_input_features, 
+        num_hidden_features, 
+        normalisation_name,
+        convolution_name,
+        convolution_params,
+        activation_name,
+        apply_skip_connection,
+        num_preprocessing_layers, 
+        num_encoder_layers, 
+        num_predictor_layers,
+        **kwargs,
+        
+    ):
+        super().__init__()
+        convolution_params.update({
+        "num_heads": 4
+        })
+        
+        preprocessing_feature_list = [num_input_features] + [num_hidden_features] * num_preprocessing_layers
+        encoder_feature_list = [num_hidden_features] * (num_encoder_layers + 1)
+        
+        
+        predictor_feature_list = [num_hidden_features] * num_predictor_layers + [1]
+        
+        self.apply_skip_connection = apply_skip_connection
+        self.preprocessing = nn.Sequential(*[
+            LinearLayer(
+                preprocessing_feature_list[idx], 
+                preprocessing_feature_list[idx + 1], 
+                normalisation_name, 
+                activation_name, 
+                apply_skip_connection if idx != 0 else False
+            ) for idx in range(len(preprocessing_feature_list) - 1)
+        ])
+        self.encoder = nn.Sequential(*[
+            GraphConvolutionLayer(
+                encoder_feature_list[idx], 
+                encoder_feature_list[idx + 1], 
+                normalisation_name, 
+                convolution_name, 
+                convolution_params, 
+                activation_name, 
+                apply_skip_connection
+            ) for idx in range(len(encoder_feature_list) - 1)
+        ])
+        self.predictor = nn.Sequential(*[
+            LinearLayer(
+                predictor_feature_list[idx], 
+                predictor_feature_list[idx + 1], 
+                normalisation_name, 
+                activation_name if idx + 1 != len(predictor_feature_list) - 1 else 'none', 
+                apply_skip_connection if idx + 1 != len(predictor_feature_list) - 1 else False
+            ) for idx in range(len(predictor_feature_list) - 1)
+        ])
+
+    def forward(self, graph, features, *args, **kwargs):
+        out = self.preprocessing(features)
+        for convolution in self.encoder:
+            out = convolution(graph, out)
+            
+        out = self.predictor(out)
+        return out
 
 
 class GNNWithPLREmbeddings(nn.Module):
@@ -307,7 +373,8 @@ class GNNWithPLREmbeddings(nn.Module):
         return out
 
 model_name_to_class = {
-    'GNN': GraphNeuralNetwork,
+    'SAGE': GraphNeuralNetwork,
+    'GAT': GraphNeuralNetworkGAT,
     'none': None,
     "GNN-PLRE": GNNWithPLREmbeddings,
 }
